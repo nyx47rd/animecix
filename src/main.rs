@@ -96,6 +96,9 @@ impl App {
         let window = adw::ApplicationWindow::new(app);
         window.set_default_size(980, 660);
         window.set_title(Some("AnimeciX"));
+        if let Some(icon) = Self::find_icon() {
+            window.set_icon(Some(&icon));
+        }
 
         let list = gtk::ListBox::new();
         list.set_selection_mode(gtk::SelectionMode::Single);
@@ -356,6 +359,30 @@ impl App {
         } else {
             self.cover_bytes.borrow_mut().insert(url.to_string(), None);
         }
+    }
+
+    fn find_icon() -> Option<gtk::gdk::Texture> {
+        let mut base = std::path::PathBuf::new();
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                base = dir.to_path_buf();
+            }
+        }
+        if let Ok(appdir) = std::env::var("APPDIR") {
+            if !appdir.is_empty() {
+                base = std::path::PathBuf::from(appdir);
+            }
+        }
+        for cand in [
+            base.join("assets/icon-256.png"),
+            base.join("icon-256.png"),
+            base.join("usr/share/pixmaps/animecix.png"),
+        ] {
+            if cand.exists() {
+                return gtk::gdk::Texture::from_file(&gtk::gio::File::for_path(&cand)).ok();
+            }
+        }
+        None
     }
 
     /// kapak yer tutucusu: yüklenene kadar gri kutu, sonra resim
