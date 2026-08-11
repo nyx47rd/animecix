@@ -96,9 +96,7 @@ impl App {
         let window = adw::ApplicationWindow::new(app);
         window.set_default_size(980, 660);
         window.set_title(Some("AnimeciX"));
-        if let Some(icon) = Self::find_icon() {
-            window.set_icon(Some(&icon));
-        }
+        gtk::Window::set_default_icon_name("tr.com.animecix");
 
         let list = gtk::ListBox::new();
         list.set_selection_mode(gtk::SelectionMode::Single);
@@ -359,30 +357,6 @@ impl App {
         } else {
             self.cover_bytes.borrow_mut().insert(url.to_string(), None);
         }
-    }
-
-    fn find_icon() -> Option<gtk::gdk::Texture> {
-        let mut base = std::path::PathBuf::new();
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
-                base = dir.to_path_buf();
-            }
-        }
-        if let Ok(appdir) = std::env::var("APPDIR") {
-            if !appdir.is_empty() {
-                base = std::path::PathBuf::from(appdir);
-            }
-        }
-        for cand in [
-            base.join("assets/icon-256.png"),
-            base.join("icon-256.png"),
-            base.join("usr/share/pixmaps/animecix.png"),
-        ] {
-            if cand.exists() {
-                return gtk::gdk::Texture::from_file(&gtk::gio::File::for_path(&cand)).ok();
-            }
-        }
-        None
     }
 
     /// kapak yer tutucusu: yüklenene kadar gri kutu, sonra resim
@@ -969,6 +943,21 @@ fn main() {
 
     app.connect_activate(|app| {
         if let Some(display) = gtk::gdk::Display::default() {
+            let mut base = std::path::PathBuf::new();
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    base = dir.to_path_buf();
+                }
+            }
+            if let Ok(ad) = std::env::var("APPDIR") {
+                if !ad.is_empty() {
+                    base = std::path::PathBuf::from(ad);
+                }
+            }
+            let theme = gtk::IconTheme::for_display(&display);
+            theme.add_search_path(base.join("assets/hicolor"));
+            theme.add_search_path(base.join("usr/share/icons/hicolor"));
+
             let css = gtk::CssProvider::new();
             css.load_from_string(
                 ".cover { background-color: alpha(currentColor, 0.08); border-radius: 8px; }
