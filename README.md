@@ -29,9 +29,11 @@ kontrol eder ve kendini otomatik güncelleyebilir.
 
 ## Ekran Görüntüleri
 
-> Ekran görüntüleri `screenshots/` klasörüne eklenecek. AppImage'i indirip çalıştırarak
-> tüm bölümleri (Ana Sayfa, Arama, Bölümler, Favoriler, Maraton, Geçmiş, Ayarlar, Kurulum)
-> doğrudan görebilirsin.
+| | | |
+|---|---|---|
+| ![Ana Sayfa](screenshots/home.png) | ![Arama](screenshots/search.png) | ![Bölümler](screenshots/episodes.png) |
+| ![Favoriler](screenshots/favorites.png) | ![Maraton](screenshots/marathon.png) | ![Geçmiş](screenshots/history.png) |
+| ![Ayarlar](screenshots/settings.png) | ![Kurulum](screenshots/welcome.png) | |
 
 ---
 

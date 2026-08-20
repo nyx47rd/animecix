@@ -10,6 +10,24 @@ use gtk::prelude::*;
 use std::process::Command;
 
 fn main() {
+    // --goto <sayfa> seçeneğini GTK'ın "bilinmeyen seçenek" hatası vermemesi için
+    // ayıkla; uygulama içinde std::env::args() ile yine okunur.
+    let raw_args: Vec<String> = std::env::args().collect();
+    let mut filtered: Vec<String> = Vec::new();
+    let mut it = raw_args.iter();
+    if let Some(p) = it.next() {
+        filtered.push(p.clone());
+    }
+    while let Some(a) = it.next() {
+        if a == "--goto" {
+            let _ = it.next(); // değeri atla
+        } else if a.starts_with("--goto=") {
+            // --goto=deger formu, atla
+        } else {
+            filtered.push(a.clone());
+        }
+    }
+
     let app = adw::Application::builder()
         .application_id("tr.com.animecix")
         .build();
@@ -336,7 +354,8 @@ fn main() {
         app_inst.window.present();
     });
 
-    app.run();
+    let argv: Vec<&str> = filtered.iter().map(|s| s.as_str()).collect();
+    app.run_with_args(&argv);
 }
 
 pub struct DepStatus {
