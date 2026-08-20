@@ -1044,31 +1044,45 @@ impl Client {
             .unwrap_or_default();
         // Eski/eksik kayıtlı başlıkları önbelleklenmiş liste verisiyle tamamla.
         // (isim/tür alanları boşsa maraton, favoriler ve geçmiş sayfaları isimsiz görünür)
+        let mut changed = false;
         for m in &mut st.marathon {
-            self.hydrate_title(&mut m.title);
+            if self.hydrate_title(&mut m.title) {
+                changed = true;
+            }
         }
         for s in &mut st.saved {
-            self.hydrate_title(s);
+            if self.hydrate_title(s) {
+                changed = true;
+            }
         }
         for h in &mut st.history {
-            self.hydrate_title(&mut h.title);
+            if self.hydrate_title(&mut h.title) {
+                changed = true;
+            }
+        }
+        // Doldurulan başlık bilgisini diske yaz (bir daha ağ/önbellek araması gerekmesin)
+        if changed {
+            self.save_state(&st);
         }
         st
     }
 
-    /// Başlık bilgisi eksikse (isim/tür/yıl/sezon) önbelleklenmiş ana liste
-    /// verisinden (maraton/favoriler/geçmiş boş görünmesin diye) tamamlar.
-    fn hydrate_title(&self, t: &mut Title) {
+    /// Başlık bilgisi eksikse (isim/tür/yıl/sezon) önce önbelleklenmiş ana liste
+    /// verisinden, yoksa ağ üzerinden arama ile tamamlar. Maraton/favoriler/
+    /// geçmiş sayfalarının isimsiz görünmesini engeller. Değişiklik yaptıysa true döner.
+    fn hydrate_title(&self, t: &mut Title) -> bool {
         let complete = !t.name.is_empty()
             && t.title_type.is_some()
             && t.year.is_some()
             && t.season_count.is_some();
         if complete {
-            return;
+            return false;
         }
+        let mut changed = false;
         if let Some(src) = self.cached_title_by_id(t.id) {
             if t.name.is_empty() {
                 t.name = src.name;
+                changed = true;
             }
             if t.poster.is_none() {
                 t.poster = src.poster;
@@ -1085,7 +1099,33 @@ impl Client {
             if t.description.is_none() {
                 t.description = src.description;
             }
+            return changed;
         }
+        // Önbellekte yoksa ağ üzerinden id ile ara
+        if t.name.is_empty() {
+            if let Ok(results) = self.search(&t.id.to_string()) {
+                if let Some(src) = results.into_iter().find(|x| x.id == t.id) {
+                    t.name = src.name;
+                    if t.poster.is_none() {
+                        t.poster = src.poster;
+                    }
+                    if t.title_type.is_none() {
+                        t.title_type = src.title_type;
+                    }
+                    if t.year.is_none() {
+                        t.year = src.year;
+                    }
+                    if t.season_count.is_none() {
+                        t.season_count = src.season_count;
+                    }
+                    if t.description.is_none() {
+                        t.description = src.description;
+                    }
+                    changed = true;
+                }
+            }
+        }
+        changed
     }
 
     /// Önbelleklenmiş (bellek + disk) ana liste verisinden id'ye göre başlığı bulur.
@@ -1546,5 +1586,49 @@ mod tests {
         let back: MarathonItem = serde_json::from_str(&json).unwrap();
         assert_eq!(back.title.name, "Foo");
         assert_eq!(back.title.meta_line(), "2000  •  Film");
+    }
+
+    #[test]
+    fn marathon_hydrates_missing_name_from_disk_cache() {
+        let c = Client::new();
+        // Sahte "lists" disk önbelleği yaz (ağ gerektirmez, deterministik)
+        let mut dir = dirs_cache_or_home();
+        dir.push(".cache/animecix/api");
+        std::fs::create_dir_all(&dir).ok();
+        let lists_path = dir.join("lists.json");
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let json = r#"{"lists":[{"name":"Popüler","items":[{"id":777,"name":"Hidratasyon Testi","title_type":"anime","year":2021,"season_count":2,"poster":null}]}]}"#;
+        std::fs::write(&lists_path, format!("{ts}\n{json}")).ok();
+
+        // Boş isimli maraton öğesi kaydet
+        let mut st = c.load_state();
+        st.marathon.push(MarathonItem {
+            title: Title {
+                id: 777,
+                name: String::new(),
+                year: None,
+                title_type: None,
+                poster: None,
+                description: None,
+                season_count: None,
+            },
+            completed: false,
+            added_at: 0,
+        });
+        c.save_state(&st);
+
+        let items = c.get_marathon();
+        let m = items.iter().find(|x| x.title.id == 777).expect("öğe olmalı");
+        assert_eq!(m.title.name, "Hidratasyon Testi", "isim önbellekten doldurulmalı");
+        assert_eq!(m.title.title_type.as_deref(), Some("anime"));
+
+        // temizlik
+        let mut st2 = c.load_state();
+        st2.marathon.retain(|x| x.title.id != 777);
+        c.save_state(&st2);
+        let _ = std::fs::remove_file(&lists_path);
     }
 }
