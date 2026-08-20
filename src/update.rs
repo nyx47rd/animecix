@@ -1,4 +1,5 @@
 use std::path::Path;
+use futures::StreamExt;
 use std::sync::mpsc::channel;
 
 use glib::ControlFlow;
@@ -103,9 +104,43 @@ pub fn replace_target(bytes: &[u8], target: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// `url`'i indirir ve `target`'in üstüne yazar. İndirme ilerlemesini
+/// `on_progress(indirilen, toplam)` ile bildirir (toplam bilinmiyorsa 0 gönderilir).
+/// GTK widget'ları `Send` olmadığı için bu fonksiyon ağ işini yapan thread'den
+/// çağrılacak şekilde tasarlandı; geri kalan UI güncellemeleri çağıran tarafta yapılır.
+pub fn download_update<F>(url: &str, target: &Path, mut on_progress: F) -> Result<(), String>
+where
+    F: FnMut(u64, u64) + Send + 'static,
+{
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+    let bytes = rt.block_on(async {
+        let client = reqwest::Client::builder()
+            .user_agent("animecix-updater")
+            .build()
+            .map_err(|e| e.to_string())?;
+        let resp = client.get(url).send().await.map_err(|e| e.to_string())?;
+        if !resp.status().is_success() {
+            return Err(format!("İndirme hatası: {}", resp.status()));
+        }
+        let total = resp.content_length().unwrap_or(0);
+        let mut buf: Vec<u8> = Vec::with_capacity(total as usize);
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| e.to_string())?;
+            buf.extend_from_slice(&chunk);
+            on_progress(buf.len() as u64, total);
+        }
+        Ok::<Vec<u8>, String>(buf)
+    })?;
+    replace_target(&bytes, target)
+}
+
 /// Güncelleme varsa onay dialogu gösterir. `show_if_uptodate` true ise güncelken de bilgi verir.
 /// `on_suppress_uptodate`, güncel sürüm bildirimi "Bir Daha Gösterme" ile kapatıldığında çağrılır.
-pub fn check_and_prompt<W: IsA<gtk::Window>>(
+pub fn check_and_prompt<W: IsA<gtk::Window> + Clone + 'static>(
     window: &W,
     show_if_uptodate: bool,
     on_suppress_uptodate: impl Fn() + 'static,
@@ -140,7 +175,7 @@ pub fn check_and_prompt<W: IsA<gtk::Window>>(
     let mut on_suppress = Some(on_suppress_uptodate);
     glib::idle_add_local(move || match rx.try_recv() {
         Ok(Ok(Some((tag, url)))) => {
-            present_update_dialog(&win, &tag, &url);
+            present_update_dialog(win.clone(), &tag, &url);
             ControlFlow::Break
         }
         Ok(Ok(None)) => {
@@ -191,10 +226,22 @@ fn present_uptodate<W: IsA<gtk::Window>>(window: &W, on_suppress: impl Fn() + 's
     dialog.present();
 }
 
-fn present_update_dialog<W: IsA<gtk::Window>>(window: &W, tag: &str, url: &str) {
+#[derive(Clone)]
+enum UpdMsg {
+    Progress(u64, u64),
+    Step(String),
+    Done,
+    Error(String),
+}
+
+fn present_update_dialog<W: IsA<gtk::Window> + Clone + 'static>(window: W, tag: &str, url: &str) {
     let tag = tag.trim_start_matches('v').to_string();
     let url = url.to_string();
     let target = std::env::var("APPIMAGE").unwrap_or_default();
+    if target.is_empty() {
+        present_info(&window, "Güncelleme Başarısız", "AppImage yolu bulunamadı.");
+        return;
+    }
     let dialog = adw::MessageDialog::builder()
         .heading("Yeni Sürüm Mevcut")
         .body(format!(
@@ -206,40 +253,131 @@ fn present_update_dialog<W: IsA<gtk::Window>>(window: &W, tag: &str, url: &str) 
     dialog.add_response("later", "Daha Sonra");
     dialog.add_response("update", "Güncelle ve Yeniden Başlat");
     dialog.set_response_appearance("update", adw::ResponseAppearance::Suggested);
-    dialog.set_transient_for(Some(window));
+    dialog.set_transient_for(Some(&window));
     dialog.connect_response(None, move |dlg, resp| {
         if resp == "update" {
             dlg.close();
-            install_and_restart(&url, &target);
+            run_update_with_progress(window.clone(), &url, &target);
         }
     });
     dialog.present();
 }
 
-fn install_and_restart(url: &str, target: &str) {
-    if target.is_empty() {
-        return;
-    }
+/// İndirme + kurulumu ilerleme çubuğu ve adım adım durum metniyle yapan pencere.
+fn run_update_with_progress<W: IsA<gtk::Window> + Clone + 'static>(window: W, url: &str, target: &str) {
+    let dlg = adw::Window::builder()
+        .title("Güncelleniyor")
+        .modal(true)
+        .transient_for(&window)
+        .default_width(380)
+        .build();
+    dlg.set_deletable(false);
+    let box_ = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    box_.set_margin_top(18);
+    box_.set_margin_bottom(18);
+    box_.set_margin_start(18);
+    box_.set_margin_end(18);
+    let label = gtk::Label::new(Some("Güncelleme başlatılıyor…"));
+    let bar = gtk::ProgressBar::new();
+    bar.set_show_text(true);
+    bar.set_text(Some("0%"));
+    bar.set_fraction(0.0);
+    box_.append(&label);
+    box_.append(&bar);
+    dlg.set_content(Some(&box_));
+    dlg.present();
+
     let url = url.to_string();
-    let target = std::path::PathBuf::from(target);
+    let target = target.to_string();
+    start_update_worker(&dlg, &label, &bar, &window, &url, &target);
+}
+
+fn start_update_worker<W: IsA<gtk::Window> + Clone + 'static>(
+    dlg: &adw::Window,
+    label: &gtk::Label,
+    bar: &gtk::ProgressBar,
+    window: &W,
+    url: &str,
+    target: &str,
+) {
+    let (tx, rx) = channel::<UpdMsg>();
+    let prog_tx = tx.clone();
+    let url_s = url.to_string();
+    let target_path = std::path::PathBuf::from(target);
     std::thread::spawn(move || {
-        let result = (|| -> Result<(), String> {
-            let client = http_client()?;
-            let bytes = client
-                .get(&url)
-                .send()
-                .map_err(|e| e.to_string())?
-                .bytes()
-                .map_err(|e| e.to_string())?;
-            replace_target(&bytes, &target)?;
-            Ok(())
-        })();
+        let _ = tx.send(UpdMsg::Step("İndiriliyor…".into()));
+        let result = download_update(&url_s, &target_path, move |cur, total| {
+            let _ = prog_tx.send(UpdMsg::Progress(cur, total));
+        });
         match result {
             Ok(()) => {
-                let _ = std::process::Command::new(&target).spawn();
+                let _ = tx.send(UpdMsg::Step("Doğrulanıyor ve yükleniyor…".into()));
+                let _ = tx.send(UpdMsg::Done);
+            }
+            Err(e) => {
+                let _ = tx.send(UpdMsg::Error(e));
+            }
+        }
+    });
+
+    let dlg = dlg.clone();
+    let label = label.clone();
+    let bar = bar.clone();
+    let window = window.clone();
+    let url_c = url.to_string();
+    let target_c = target.to_string();
+    glib::idle_add_local(move || {
+        match rx.try_recv() {
+            Ok(UpdMsg::Progress(cur, total)) => {
+                if total > 0 {
+                    let f = (cur as f64 / total as f64).clamp(0.0, 1.0);
+                    bar.set_fraction(f);
+                    bar.set_text(Some(&format!("{}%", (f * 100.0) as u32)));
+                } else {
+                    bar.pulse();
+                    bar.set_text(Some(&format!("{} KB", cur / 1024)));
+                }
+                ControlFlow::Continue
+            }
+            Ok(UpdMsg::Step(s)) => {
+                label.set_text(&s);
+                ControlFlow::Continue
+            }
+            Ok(UpdMsg::Done) => {
+                label.set_text("Yeniden başlatılıyor…");
+                bar.set_fraction(1.0);
+                bar.set_text(Some("100%"));
+                let _ = std::process::Command::new(&target_c).spawn();
                 std::process::exit(0);
             }
-            Err(e) => eprintln!("Güncelleme başarısız: {e}"),
+            Ok(UpdMsg::Error(e)) => {
+                label.set_text(&format!("Güncelleme başarısız: {e}"));
+                bar.set_fraction(0.0);
+                dlg.set_deletable(true);
+                if let Some(b) = dlg.content().and_then(|w| w.downcast::<gtk::Box>().ok()) {
+                    let has_retry = b
+                        .last_child()
+                        .and_then(|w| w.downcast::<gtk::Button>().ok())
+                        .map(|btn| btn.label().as_deref() == Some("Tekrar Dene"))
+                        .unwrap_or(false);
+                    if !has_retry {
+                        let retry = gtk::Button::with_label("Tekrar Dene");
+                        retry.set_margin_top(8);
+                        let dlg2 = dlg.clone();
+                        let win2 = window.clone();
+                        let url2 = url_c.clone();
+                        let target2 = target_c.clone();
+                        retry.connect_clicked(move |_| {
+                            dlg2.close();
+                            run_update_with_progress(win2.clone(), &url2, &target2);
+                        });
+                        b.append(&retry);
+                    }
+                }
+                ControlFlow::Break
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => ControlFlow::Break,
         }
     });
 }
@@ -286,5 +424,52 @@ mod tests {
         let _ = std::fs::remove_file(&tmp);
         assert!(replace_target(b"not an appimage", &tmp).is_err());
         std::fs::remove_file(&tmp).ok();
+    }
+
+    /// Yerel bir HTTP sunucu açıp gerçek indirme + ilerleme bildirimini doğrular.
+    #[test]
+    fn download_update_writes_target_and_reports_progress() {
+        use std::io::{Read, Write};
+        let elf = b"\x7fELF-appimage-govde-icerigi-burada-1234567890";
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().take(1) {
+                let mut s = stream.unwrap();
+                let mut buf = [0u8; 4096];
+                let _ = s.read(&mut buf); // istemci isteğini oku
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+                    elf.len()
+                );
+                s.write_all(resp.as_bytes()).unwrap();
+                s.write_all(elf).unwrap();
+                s.flush().unwrap();
+            }
+        });
+        let url = format!("http://127.0.0.1:{}/AnimeciX-x86_64.AppImage", port);
+        let target = std::env::temp_dir().join(format!("animecix-dl-test-{}.AppImage", std::process::id()));
+        let _ = std::fs::remove_file(&target);
+        let progress = std::sync::Arc::new(std::sync::Mutex::new((0u64, 0u64)));
+        let prog = progress.clone();
+        let r = download_update(&url, &target, move |cur, total| {
+            *prog.lock().unwrap() = (cur, total);
+        });
+        assert!(r.is_ok(), "indirme başarısız: {:?}", r.err());
+        assert!(target.exists(), "hedef dosya yazılmadı");
+        assert_eq!(std::fs::read(&target).unwrap(), elf);
+        let last = *progress.lock().unwrap();
+        assert_eq!(last.1, elf.len() as u64, "toplam boyut bildirilmedi");
+        assert_eq!(last.0, elf.len() as u64, "indirilen boyut bildirilmedi");
+        std::fs::remove_file(&target).ok();
+    }
+
+    #[test]
+    fn download_update_fails_on_unreachable() {
+        let target = std::env::temp_dir().join(format!("animecix-dl-fail-{}.AppImage", std::process::id()));
+        let _ = std::fs::remove_file(&target);
+        let r = download_update("http://127.0.0.1:1/nope", &target, |_, _| {});
+        assert!(r.is_err(), "erişilemeyen adres başarısız olmalı");
+        std::fs::remove_file(&target).ok();
     }
 }
