@@ -48,12 +48,19 @@ pub struct VideoSource {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Title {
+    #[serde(default)]
     pub id: u64,
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub year: Option<i64>,
+    #[serde(default)]
     pub title_type: Option<String>,
+    #[serde(default)]
     pub poster: Option<String>,
+    #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
     pub season_count: Option<i64>,
 }
 
@@ -1031,10 +1038,109 @@ impl Client {
 
     pub fn load_state(&self) -> State {
         let p = Self::state_path();
-        std::fs::read_to_string(&p)
+        let mut st: State = std::fs::read_to_string(&p)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // Eski/eksik kayıtlı başlıkları önbelleklenmiş liste verisiyle tamamla.
+        // (isim/tür alanları boşsa maraton, favoriler ve geçmiş sayfaları isimsiz görünür)
+        for m in &mut st.marathon {
+            self.hydrate_title(&mut m.title);
+        }
+        for s in &mut st.saved {
+            self.hydrate_title(s);
+        }
+        for h in &mut st.history {
+            self.hydrate_title(&mut h.title);
+        }
+        st
+    }
+
+    /// Başlık bilgisi eksikse (isim/tür/yıl/sezon) önbelleklenmiş ana liste
+    /// verisinden (maraton/favoriler/geçmiş boş görünmesin diye) tamamlar.
+    fn hydrate_title(&self, t: &mut Title) {
+        let complete = !t.name.is_empty()
+            && t.title_type.is_some()
+            && t.year.is_some()
+            && t.season_count.is_some();
+        if complete {
+            return;
+        }
+        if let Some(src) = self.cached_title_by_id(t.id) {
+            if t.name.is_empty() {
+                t.name = src.name;
+            }
+            if t.poster.is_none() {
+                t.poster = src.poster;
+            }
+            if t.title_type.is_none() {
+                t.title_type = src.title_type;
+            }
+            if t.year.is_none() {
+                t.year = src.year;
+            }
+            if t.season_count.is_none() {
+                t.season_count = src.season_count;
+            }
+            if t.description.is_none() {
+                t.description = src.description;
+            }
+        }
+    }
+
+    /// Önbelleklenmiş (bellek + disk) ana liste verisinden id'ye göre başlığı bulur.
+    /// Ağ isteği yapmaz; sadece mevcut önbelleği kullanır.
+    fn cached_title_by_id(&self, id: u64) -> Option<Title> {
+        let value = {
+            let mem = self.cache.lock().unwrap();
+            if let Some((_, v)) = mem.get("lists") {
+                Some(v.clone())
+            } else {
+                self.disk_api_load("lists").map(|(_, v)| v)
+            }
+        }?;
+        let mut found = None;
+        if let Some(lists) = value.get("lists").and_then(|l| l.as_array()) {
+            for lst in lists {
+                if let Some(items) = lst.get("items").and_then(|i| i.as_array()) {
+                    for it in items {
+                        let tid = it
+                            .get("id")
+                            .and_then(|x| x.as_u64())
+                            .or_else(|| it.get("title_id").and_then(|x| x.as_u64()));
+                        if tid == Some(id) {
+                            found = Some(Title {
+                                id,
+                                name: it
+                                    .get("name")
+                                    .and_then(|x| x.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                year: it.get("year").and_then(|x| x.as_i64()),
+                                title_type: it
+                                    .get("title_type")
+                                    .and_then(|x| x.as_str())
+                                    .map(|s| s.to_string()),
+                                poster: it
+                                    .get("poster")
+                                    .and_then(|x| x.as_str())
+                                    .map(|s| s.to_string()),
+                                description: it
+                                    .get("description")
+                                    .and_then(|x| x.as_str())
+                                    .map(|s| s.to_string()),
+                                season_count: it.get("season_count").and_then(|x| x.as_i64()),
+                            });
+                            break;
+                        }
+                    }
+                }
+                if found.is_some() {
+                    break;
+                }
+            }
+        }
+        found
     }
 
     pub fn save_watched(&self, w: &Watched, name: &str) {
@@ -1394,5 +1500,51 @@ mod tests {
         let a = sample("anime", Some(2022), Some(3));
         let b = sample("anime", Some(2022), Some(3));
         assert_eq!(a.meta_line(), b.meta_line());
+    }
+
+    #[test]
+    fn marathon_persists_full_title_and_meta() {
+        let c = Client::new();
+        let before = c.get_marathon().len();
+        let t = Title {
+            id: 4242,
+            name: "Deneme Anime".into(),
+            year: Some(2023),
+            title_type: Some("anime".into()),
+            poster: Some("http://x/p.png".into()),
+            description: None,
+            season_count: Some(3),
+        };
+        assert!(c.toggle_marathon(&t));
+        let items = c.get_marathon();
+        assert_eq!(items.len(), before + 1, "maraton öğesi eklenmeli");
+        let mine = items
+            .iter()
+            .find(|m| m.title.id == 4242)
+            .expect("eklenen öğe bulunmalı");
+        assert_eq!(mine.title.name, "Deneme Anime", "isim korunmalı");
+        assert!(!mine.title.meta_line().is_empty(), "meta korunmalı");
+        c.toggle_marathon(&t); // temizlik
+    }
+
+    #[test]
+    fn marathon_item_serde_roundtrip_keeps_name() {
+        let item = MarathonItem {
+            title: Title {
+                id: 7,
+                name: "Foo".into(),
+                year: Some(2000),
+                title_type: Some("movie".into()),
+                poster: None,
+                description: None,
+                season_count: None,
+            },
+            completed: true,
+            added_at: 123,
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        let back: MarathonItem = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.title.name, "Foo");
+        assert_eq!(back.title.meta_line(), "2000  •  Film");
     }
 }
