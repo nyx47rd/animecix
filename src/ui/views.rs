@@ -477,6 +477,9 @@ impl SettingsView {
         let update_group = adw::PreferencesGroup::new();
         update_group.set_title("Güncelleme");
 
+        // on_save'i Rc'ye sar (hem kaydet hem "Bir Daha Gösterme" bastırma için kullanılacak)
+        let on_save = Rc::new(on_save);
+
         let auto_update_row = adw::SwitchRow::new();
         auto_update_row.set_title("Otomatik Güncelleme");
         auto_update_row.set_subtitle("Başlatmada yeni sürümü kontrol eder ve AppImage'i kendisi günceller");
@@ -484,15 +487,30 @@ impl SettingsView {
         auto_update_row.set_sensitive(crate::update::is_appimage());
         update_group.add(&auto_update_row);
 
+        let notify_row = adw::SwitchRow::new();
+        notify_row.set_title("Güncel Sürüm Bildirimi");
+        notify_row.set_subtitle("Başlatmada güncel sürümdeyken bilgilendirme göster");
+        notify_row.set_active(settings.notify_uptodate);
+        notify_row.set_sensitive(crate::update::is_appimage());
+        update_group.add(&notify_row);
+
         let check_btn = gtk::Button::with_label("Şimdi Güncelle");
         check_btn.add_css_class("flat");
         check_btn.add_css_class("pill");
         check_btn.set_margin_top(4);
         check_btn.set_sensitive(crate::update::is_appimage());
         let check_btn_c = check_btn.clone();
+        let settings_for_suppress = settings.clone();
+        let on_save_suppress = on_save.clone();
         check_btn.connect_clicked(move |_| {
             if let Some(win) = check_btn_c.root().and_downcast::<gtk::Window>() {
-                crate::update::check_and_prompt(&win, true);
+                let cur = settings_for_suppress.clone();
+                let suppress = on_save_suppress.clone();
+                crate::update::check_and_prompt(&win, true, move || {
+                    let mut sup = cur.clone();
+                    sup.notify_uptodate = false;
+                    suppress(sup);
+                });
             }
         });
         update_group.add(&check_btn);
@@ -503,7 +521,6 @@ impl SettingsView {
             shortcut_row_c.set_sensitive(r.is_active());
         });
 
-        let on_save = Rc::new(on_save);
         let s_base = settings.clone();
 
         let save_all = {
@@ -513,6 +530,7 @@ impl SettingsView {
             let fs_r = fs_row.clone();
             let ani_r = aniskip_row.clone();
             let au_r = auto_update_row.clone();
+            let notify_r = notify_row.clone();
             let s = s_base.clone();
             let on_save = on_save.clone();
             Rc::new(move || {
@@ -533,6 +551,7 @@ impl SettingsView {
                 updated.auto_fullscreen = fs_r.is_active();
                 updated.aniskip_enabled = ani_r.is_active();
                 updated.auto_update = au_r.is_active();
+                updated.notify_uptodate = notify_r.is_active();
                 on_save(updated);
             })
         };
@@ -549,6 +568,8 @@ impl SettingsView {
         aniskip_row.connect_active_notify(move |_| sa5());
         let sa6 = save_all.clone();
         auto_update_row.connect_active_notify(move |_| sa6());
+        let sa7 = save_all.clone();
+        notify_row.connect_active_notify(move |_| sa7());
 
         let data_group = adw::PreferencesGroup::new();
         data_group.set_title("Veri Yönetimi");
