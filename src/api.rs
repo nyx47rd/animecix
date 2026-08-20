@@ -46,7 +46,7 @@ pub struct VideoSource {
     pub quality: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Title {
     #[serde(default)]
     pub id: u64,
@@ -1036,11 +1036,18 @@ impl Client {
         p
     }
 
+    /// state.json eski sürümle ya da bozuk/yanlış tipte alanlarla yazılmış
+    /// olabilir (örn. maraton öğesinin `title` alanı bir nesne yerine düz bir
+    /// id sayısıydı). Bütün dosyayı doğrudan `State`'e deserialize edersek TEK
+    /// bir bozuk alan tüm state'i çöpe çıkarır (unwrap_or_default → boş State).
+    /// Bu yüzden önce `Value` olarak okuyup bölüm bölüm, alan alan toleranslı
+    /// migrate ediyoruz; bir kayıt bozuksa sadece o atlanır, geri kalanı kalır.
     pub fn load_state(&self) -> State {
         let p = Self::state_path();
-        let mut st: State = std::fs::read_to_string(&p)
+        let mut st = std::fs::read_to_string(&p)
             .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .map(|v| Self::migrate_state(&v))
             .unwrap_or_default();
         // Eski/eksik kayıtlı başlıkları önbelleklenmiş liste verisiyle tamamla.
         // (isim/tür alanları boşsa maraton, favoriler ve geçmiş sayfaları isimsiz görünür)
@@ -1064,6 +1071,144 @@ impl Client {
         if changed {
             self.save_state(&st);
         }
+        st
+    }
+
+    /// Bir JSON değerinden `Title` üretir. Eski şemaları da kapsar:
+    /// - nesne: `id`/`title_id`, `name`/`title`, `title_type`/`type`,
+    ///   `poster`/`image`, `year`, `season_count`/`seasons`, `description`
+    /// - düz sayı: sadece id (hidratasyon ile tamamlanır)
+    /// - düz string: sadece isim
+    fn val_to_title(v: &serde_json::Value) -> Option<Title> {
+        match v {
+            serde_json::Value::Object(_) => {
+                let id = v
+                    .get("id")
+                    .and_then(|x| x.as_u64())
+                    .or_else(|| v.get("title_id").and_then(|x| x.as_u64()))
+                    .unwrap_or(0);
+                let name = v
+                    .get("name")
+                    .and_then(|x| x.as_str())
+                    .or_else(|| v.get("title").and_then(|x| x.as_str()))
+                    .unwrap_or("")
+                    .to_string();
+                let title_type = v
+                    .get("title_type")
+                    .and_then(|x| x.as_str())
+                    .or_else(|| v.get("type").and_then(|x| x.as_str()))
+                    .map(|s| s.to_string());
+                let poster = v
+                    .get("poster")
+                    .and_then(|x| x.as_str())
+                    .or_else(|| v.get("image").and_then(|x| x.as_str()))
+                    .or_else(|| v.get("poster_url").and_then(|x| x.as_str()))
+                    .map(|s| s.to_string());
+                let year = v.get("year").and_then(|x| x.as_i64());
+                let season_count = v
+                    .get("season_count")
+                    .and_then(|x| x.as_i64())
+                    .or_else(|| v.get("seasons").and_then(|x| x.as_i64()));
+                let description = v
+                    .get("description")
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string());
+                Some(Title {
+                    id,
+                    name,
+                    year,
+                    title_type,
+                    poster,
+                    description,
+                    season_count,
+                })
+            }
+            serde_json::Value::Number(n) => Some(Title {
+                id: n.as_u64().unwrap_or(0),
+                ..Default::default()
+            }),
+            serde_json::Value::String(s) => Some(Title {
+                name: s.clone(),
+                ..Default::default()
+            }),
+            _ => None,
+        }
+    }
+
+    /// state.json'ı bölüm bölüm toleranslı şekilde `State`'e dönüştürür.
+    /// Tek bir bozuk kayıt tüm state'i çökertmez; sadece o kayıt atlanır.
+    fn migrate_state(v: &serde_json::Value) -> State {
+        let obj = match v.as_object() {
+            Some(o) => o,
+            None => return State::default(),
+        };
+        let mut st = State::default();
+        if let Some(c) = obj.get("current") {
+            if let Ok(w) = serde_json::from_value::<Watched>(c.clone()) {
+                st.current = Some(w);
+            }
+        }
+        if let Some(w) = obj.get("watched") {
+            if let Ok(m) = serde_json::from_value::<HashMap<String, Vec<Watched>>>(w.clone()) {
+                st.watched = m;
+            }
+        }
+        if let Some(s) = obj.get("saved") {
+            if let Some(arr) = s.as_array() {
+                for it in arr {
+                    if let Some(t) = Self::val_to_title(it) {
+                        st.saved.push(t);
+                    }
+                }
+            }
+        }
+        if let Some(h) = obj.get("history") {
+            if let Some(arr) = h.as_array() {
+                for it in arr {
+                    let title = it.get("title").and_then(Self::val_to_title);
+                    let episode =
+                        it.get("episode")
+                            .and_then(|x| serde_json::from_value::<Episode>(x.clone()).ok());
+                    let ts = it.get("ts").and_then(|x| x.as_u64()).unwrap_or(0);
+                    if let (Some(title), Some(episode)) = (title, episode) {
+                        st.history.push(HistoryEntry { title, episode, ts });
+                    }
+                }
+            }
+        }
+        if let Some(m) = obj.get("marathon") {
+            if let Some(arr) = m.as_array() {
+                for it in arr {
+                    let title = it.get("title").and_then(Self::val_to_title);
+                    let completed =
+                        it.get("completed").and_then(|x| x.as_bool()).unwrap_or(false);
+                    let added_at =
+                        it.get("added_at").and_then(|x| x.as_u64()).unwrap_or(0);
+                    if let Some(title) = title {
+                        st.marathon.push(MarathonItem {
+                            title,
+                            completed,
+                            added_at,
+                        });
+                    }
+                }
+            }
+        }
+        st.welcome_seen = obj.get("welcome_seen").and_then(|x| x.as_bool()).unwrap_or(false);
+        if let Some(p) = obj.get("progress") {
+            if let Ok(m) = serde_json::from_value::<HashMap<String, (f64, f64)>>(p.clone()) {
+                st.progress = m;
+            }
+        }
+        st.quick_search_tip_seen = obj
+            .get("quick_search_tip_seen")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
+        st.search_tip_seen = obj.get("search_tip_seen").and_then(|x| x.as_bool()).unwrap_or(false);
+        st.right_click_tip_seen = obj
+            .get("right_click_tip_seen")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
         st
     }
 
@@ -1586,6 +1731,27 @@ mod tests {
         let back: MarathonItem = serde_json::from_str(&json).unwrap();
         assert_eq!(back.title.name, "Foo");
         assert_eq!(back.title.meta_line(), "2000  •  Film");
+    }
+
+    #[test]
+    fn migrate_state_recovers_bare_id_and_alias_fields() {
+        // Eski şema: maraton öğesinin `title` alanı düz bir id sayısı, ve favoriler
+        // `title` anahtarıyla isim tutuyor olabilir. migrate_state bunları çökertmeden
+        // (boş State döndürmeden) kurtarmalı.
+        let value: serde_json::Value = serde_json::json!({
+            "marathon": [
+                { "title": 777, "completed": false, "added_at": 1 }
+            ],
+            "saved": [
+                { "title": "Eski Favori", "id": 999 }
+            ]
+        });
+        let st = Client::migrate_state(&value);
+        assert_eq!(st.marathon.len(), 1, "bozuk kayıt state'i çökertmemeli");
+        assert_eq!(st.marathon[0].title.id, 777, "düz id'den Title.id çıkarılmalı");
+        assert_eq!(st.saved.len(), 1);
+        assert_eq!(st.saved[0].name, "Eski Favori", "eski `title` alanı isim olarak okunmalı");
+        assert_eq!(st.saved[0].id, 999);
     }
 
     #[test]
