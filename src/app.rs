@@ -202,6 +202,7 @@ impl App {
         if welcome_seen {
             app_inst.fetch_home();
         }
+        app_inst.apply_goto_arg();
         app_inst
     }
 
@@ -449,6 +450,75 @@ impl App {
                 let page_name = format!("eps_{}", title.id);
                 switch(&self.stack, &page_name, gtk::StackTransitionType::SlideLeft, self.build_episodes_view(title, eps));
             }
+        }
+    }
+
+    /// CLI: `--goto <sayfa>` ile başlangıçta belirli bir sayfayı açar.
+    /// Ekran görüntüsü otomasyonu için kullanılır; AT-SPI/a11y'ye ihtiyaç duymaz.
+    fn apply_goto_arg(&self) {
+        let args: Vec<String> = std::env::args().collect();
+        let mut it = args.iter();
+        while let Some(a) = it.next() {
+            if a == "--goto" {
+                if let Some(val) = it.next() {
+                    self.goto_page(val);
+                }
+            }
+        }
+    }
+
+    fn goto_page(&self, val: &str) {
+        self.page_history.borrow_mut().clear();
+        match val {
+            "welcome" => {
+                self.page_history.borrow_mut().push(Page::Welcome);
+                self.show_page(&Page::Welcome);
+            }
+            "home" => {
+                self.page_history.borrow_mut().push(Page::Home);
+                self.show_page(&Page::Home);
+                self.fetch_home();
+            }
+            "favorites" => {
+                self.page_history.borrow_mut().push(Page::Favs);
+                self.show_page(&Page::Favs);
+            }
+            "marathon" => {
+                self.page_history.borrow_mut().push(Page::Marathon);
+                self.show_page(&Page::Marathon);
+            }
+            "history" => {
+                self.page_history.borrow_mut().push(Page::History);
+                self.show_page(&Page::History);
+            }
+            "settings" => {
+                self.page_history.borrow_mut().push(Page::Settings);
+                self.show_page(&Page::Settings);
+            }
+            "search" => {
+                self.page_history.borrow_mut().push(Page::Home);
+                self.show_page(&Page::Home);
+                self.fetch_home();
+                self.search_bar.set_search_mode(true);
+                self.search_entry.set_text("Tokyo");
+                let q = self.search_entry.text().to_string();
+                self.do_search(q);
+            }
+            "episodes" => {
+                self.page_history.borrow_mut().push(Page::Home);
+                self.show_page(&Page::Home);
+                self.fetch_home();
+                let this = self.clone_ref();
+                glib::timeout_add_local_once(std::time::Duration::from_millis(1800), move || {
+                    let cats = this.cats.borrow();
+                    let first = cats.iter().flat_map(|c| c.items.iter()).next().cloned();
+                    drop(cats);
+                    if let Some(t) = first {
+                        this.open_episodes(t);
+                    }
+                });
+            }
+            _ => {}
         }
     }
 
