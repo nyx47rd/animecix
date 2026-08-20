@@ -31,7 +31,7 @@ pub enum Msg {
     Cats(Result<Vec<api::Category>, String>),
     Search(Result<Vec<Title>, String>),
     Eps(Title, Result<Vec<Episode>, String>),
-    Play(Title, Episode, Result<String, String>),
+    Play(Title, Episode, Result<Vec<String>, String>),
 }
 
 pub struct App {
@@ -1492,246 +1492,7 @@ impl App {
                 Err(e) => self.show_error(&e),
             },
             Msg::Play(title, ep, res) => match res {
-                Ok(url) => {
-                    let w = api::Watched {
-                        title_id: title.id,
-                        episode: ep.episode,
-                        season: ep.season,
-                    };
-                    self.client.save_watched(&w, &title.name);
-                    self.client.add_history(&title, &ep);
-
-                    let media_title = format!("{} | S{:02}E{:02}", title.name, ep.season, ep.episode);
-                    let tid = title.id;
-                    let season = ep.season;
-                    let episode = ep.episode;
-                    let prog_key = format!("{tid}:{season}:{episode}");
-
-                    let saved_pos = self.client.get_progress(tid, season, episode)
-                        .filter(|(pos, dur)| *pos > 5.0 && *dur > 0.0 && *pos / *dur < 0.95)
-                        .map(|(pos, _)| pos);
-
-                    let sock_path = format!("/tmp/animecix-mpv-{tid}-{season}-{episode}.sock");
-                    let _ = std::fs::remove_file(&sock_path);
-
-                    let mut cmd = std::process::Command::new("mpv");
-                    cmd.arg("--user-agent=mozilla")
-                        .arg(format!("--force-media-title={media_title}"))
-                        .arg("--keep-open=yes")
-                        .arg(format!("--input-ipc-server={sock_path}"));
-
-                    if self.settings.borrow().auto_fullscreen {
-                        cmd.arg("--fullscreen");
-                    }
-
-                    let aniskip = if self.settings.borrow().aniskip_enabled {
-                        self.client.fetch_aniskip_timestamps(&title.name, episode)
-                    } else {
-                        api::AniSkipTimes::default()
-                    };
-
-                    let fmt_sec = |sec: f64| -> String {
-                        let s = sec as u64;
-                        format!("{:02}:{:02}", s / 60, s % 60)
-                    };
-
-                    let skip_cmd = if let (Some(st), Some(et)) = (aniskip.op_start, aniskip.op_end) {
-                        format!("s seek {et:.1} absolute; show-text \"⏩ İntro Atlandı (AniSkip: {} → {})\" 3000\n", fmt_sec(st), fmt_sec(et))
-                    } else {
-                        "s show-text \"⚠️ İntro zamanı bulunamadı (AniSkip)\" 2500\n".to_string()
-                    };
-
-                    let outro_cmd = if let (Some(st), Some(et)) = (aniskip.ed_start, aniskip.ed_end) {
-                        format!("e seek {et:.1} absolute; show-text \"⏩ Outro Atlandı (AniSkip: {} → {})\" 3000\n", fmt_sec(st), fmt_sec(et))
-                    } else {
-                        "e show-text \"⚠️ Outro zamanı bulunamadı (AniSkip)\" 2500\n".to_string()
-                    };
-
-                    let cmd_file = format!("/tmp/animecix-cmd-{tid}.cmd");
-                    let _ = std::fs::remove_file(&cmd_file);
-
-                    let input_conf_path = format!("/tmp/animecix-input-{tid}.conf");
-                    let input_conf_content = format!(
-                        "{skip_cmd}\
-                         {outro_cmd}\
-                         S seek -30; show-text \"⏪ 30s Geri\" 2000\n\
-                         n run \"sh\" \"-c\" \"echo next > {cmd_file}\"; show-text \"⏳ Sonraki Bölüm Yükleniyor...\" 4000\n\
-                         N run \"sh\" \"-c\" \"echo next > {cmd_file}\"; show-text \"⏳ Sonraki Bölüm Yükleniyor...\" 4000\n\
-                         p run \"sh\" \"-c\" \"echo prev > {cmd_file}\"; show-text \"⏳ Önceki Bölüm Yükleniyor...\" 4000\n\
-                         P run \"sh\" \"-c\" \"echo prev > {cmd_file}\"; show-text \"⏳ Önceki Bölüm Yükleniyor...\" 4000\n"
-                    );
-                    let _ = std::fs::write(&input_conf_path, input_conf_content);
-                    cmd.arg(format!("--input-conf={input_conf_path}"));
-
-                    cmd.args(saved_pos.map(|p| format!("--start={p:.1}")).as_slice())
-                        .arg("--cache=yes")
-                        .arg("--demuxer-max-bytes=128MiB")
-                        .arg("--demuxer-max-back-bytes=32MiB")
-                        .arg("--demuxer-readahead-secs=120")
-                        .arg("--cache-pause=yes")
-                        .arg("--cache-pause-wait=3")
-                        .arg("--cache-secs=120")
-                        .arg("--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5")
-                        .arg("--network-timeout=10")
-                        .arg("--hwdec=auto-safe")
-                        .arg("--ytdl-format=bestvideo[height<=1080]+bestaudio/best")
-                        .arg(&url);
-                    let _ = cmd.spawn();
-
-                    let client_c = self.client.clone();
-                    let title_c = title.clone();
-                    let ep_c = ep.clone();
-                    let sock_c = sock_path.clone();
-                    let cmd_c = cmd_file.clone();
-                    let aniskip_c = aniskip.clone();
-
-                    let (sender, receiver) = std::sync::mpsc::channel::<(f64, f64)>();
-                    let sock_poll = sock_path.clone();
-                    std::thread::spawn(move || {
-                        let mut wait = 0u32;
-                        let mut current_ep = ep_c.episode;
-                        let mut current_season = ep_c.season;
-                        let mut op_prompted = false;
-                        let mut ed_prompted = false;
-
-                        loop {
-                            if std::path::Path::new(&sock_poll).exists() { break; }
-                            std::thread::sleep(std::time::Duration::from_millis(500));
-                            wait += 1;
-                            if wait > 30 { return; }
-                        }
-                        loop {
-                            if !std::path::Path::new(&sock_poll).exists() { break; }
-
-                            // MPV İçi 'n' veya 'p' Kısayol Komutu Kontrolü
-                            if std::path::Path::new(&cmd_c).exists() {
-                                if let Ok(cmd_str) = std::fs::read_to_string(&cmd_c) {
-                                    let _ = std::fs::remove_file(&cmd_c);
-                                    let target_ep = if cmd_str.trim() == "next" {
-                                        current_ep + 1
-                                    } else if current_ep > 1 {
-                                        current_ep - 1
-                                    } else {
-                                        1
-                                    };
-
-                                    let target = Episode {
-                                        episode: target_ep,
-                                        season: current_season,
-                                        name: format!("Bölüm {target_ep}"),
-                                    };
-
-                                    if let Ok(next_url) = client_c.resolve(title_c.id, target_ep, current_season) {
-                                        current_ep = target_ep;
-                                        op_prompted = false;
-                                        ed_prompted = false;
-                                        let json_cmd = format!("{{\"command\":[\"loadfile\", \"{}\"]}}\n", next_url);
-                                        crate::player::send_mpv_cmd(&sock_c, &json_cmd);
-                                        let json_osd = format!(
-                                            "{{\"command\":[\"show-text\", \"▶️ Bölüm {} Açıldı\", 3000]}}\n",
-                                            target_ep
-                                        );
-                                        crate::player::send_mpv_cmd(&sock_c, &json_osd);
-
-                                        let w = api::Watched {
-                                            title_id: title_c.id,
-                                            episode: target_ep,
-                                            season: current_season,
-                                        };
-                                        client_c.save_watched(&w, &title_c.name);
-                                        client_c.add_history(&title_c, &target);
-                                    } else {
-                                        let json_err = "{\"command\":[\"show-text\", \"⚠️ Sonraki Bölüm Bulunamadı\", 3000]}\n";
-                                        crate::player::send_mpv_cmd(&sock_c, json_err);
-                                    }
-                                }
-                            }
-
-                            let (pos, dur) = crate::player::query_mpv_position(&sock_poll).unwrap_or((0.0, 0.0));
-
-                            // AniSkip Anlık İntro/Outro Bildirim Uyarısı (7 Saniye Ekranda Kalır)
-                            if let Some(st) = aniskip_c.op_start {
-                                if !op_prompted && pos >= (st - 1.5) && pos <= (st + 10.0) {
-                                    op_prompted = true;
-                                    let osd = "{\"command\":[\"show-text\", \"⏩ İntro Başladı ('s' ile atlayabilirsiniz)\", 7000]}\n";
-                                    crate::player::send_mpv_cmd(&sock_c, osd);
-                                }
-                            }
-                            if let Some(st) = aniskip_c.ed_start {
-                                if !ed_prompted && pos >= (st - 1.5) && pos <= (st + 10.0) {
-                                    ed_prompted = true;
-                                    let osd = "{\"command\":[\"show-text\", \"🏁 Outro Başladı ('n' ile Sonraki Bölüm)\", 7000]}\n";
-                                    crate::player::send_mpv_cmd(&sock_c, osd);
-                                }
-                            }
-
-                            if sender.send((pos, dur)).is_err() { break; }
-                            std::thread::sleep(std::time::Duration::from_millis(500));
-                        }
-                    });
-
-                    let progress2 = self.progress.clone();
-                    let progress_bars2 = self.progress_bars.clone();
-                    let client_prog = self.client.clone();
-                    let pk = prog_key.clone();
-                    let receiver = std::sync::Arc::new(std::sync::Mutex::new(receiver));
-                    glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
-                        let rx = receiver.lock().unwrap();
-                        // Kanalı tamamen boşalt, en güncel (son) değeri al
-                        let mut latest: Option<(f64, f64)> = None;
-                        let mut disconnected = false;
-                        loop {
-                            match rx.try_recv() {
-                                Ok(v) => { latest = Some(v); }
-                                Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                                    disconnected = true;
-                                    break;
-                                }
-                            }
-                        }
-                        drop(rx);
-
-                        if disconnected {
-                            let last = progress2.borrow().get(&pk).copied();
-                            if let Some((pos, dur)) = last {
-                                client_prog.save_progress(tid, season, episode, pos, dur);
-                            }
-                            return glib::ControlFlow::Break;
-                        }
-
-                        if let Some((pos, dur)) = latest {
-                            if pos < 1.0 { return glib::ControlFlow::Continue; }
-                            progress2.borrow_mut().insert(pk.clone(), (pos, dur));
-                            if let Some((pb, lbl)) = progress_bars2.borrow().get(&pk) {
-                                if dur > 0.0 {
-                                    pb.set_fraction((pos / dur).clamp(0.0, 1.0));
-                                    let fmt = |s: f64| -> String {
-                                        let s = s as u64;
-                                        if s >= 3600 { format!("{}:{:02}:{:02}", s/3600, (s%3600)/60, s%60) }
-                                        else { format!("{}:{:02}", s/60, s%60) }
-                                    };
-                                    lbl.set_text(&format!("{} / {}", fmt(pos), fmt(dur)));
-                                    lbl.set_visible(true);
-                                    pb.set_visible(true);
-                                }
-                            }
-                            client_prog.save_progress(tid, season, episode, pos, dur);
-                        }
-                        glib::ControlFlow::Continue
-                    });
-
-                    let t = adw::Toast::new(&format!(
-                        "▶ {media_title} açılıyor…{}",
-                        saved_pos.map(|p| {
-                            let s = p as u64;
-                            if s >= 3600 { format!(" ({}:{:02}:{:02}'den)", s/3600, (s%3600)/60, s%60) }
-                            else { format!(" ({}:{:02}'den)", s/60, s%60) }
-                        }).unwrap_or_default()
-                    ));
-                    t.set_timeout(3);
-                    self.toast.add_toast(t);
-                }
+                Ok(candidates) => self.play_candidates(&title, &ep, &candidates),
                 Err(e) => self.show_error(&e),
             },
         }
@@ -1752,12 +1513,348 @@ impl App {
         self.busy(true);
         self.spawn(move |c| {
             let res = if is_movie {
-                c.resolve_movie(title.id)
+                c.resolve_movie(title.id).map(|u| vec![u])
             } else {
-                c.resolve(title.id, ep.episode, ep.season)
+                c.resolve_all(title.id, ep.episode, ep.season)
             };
             move || Msg::Play(title, ep, res)
         });
+    }
+
+    /// Bölümü oynatır; en iyi kaliteli kaynaktan başlar, açılamazsa sıradaki kaynağa geçer.
+    fn play_candidates(&self, title: &Title, ep: &Episode, candidates: &[String]) {
+        let w = api::Watched {
+            title_id: title.id,
+            episode: ep.episode,
+            season: ep.season,
+        };
+        self.client.set_current(&w);
+        self.client.add_history(&title, &ep);
+
+        let media_title = format!("{} | S{:02}E{:02}", title.name, ep.season, ep.episode);
+        let tid = title.id;
+        let season = ep.season;
+        let episode = ep.episode;
+        let prog_key = format!("{tid}:{season}:{episode}");
+
+        let saved_pos = self.client.get_progress(tid, season, episode)
+            .filter(|(pos, dur)| *pos > 5.0 && *dur > 0.0 && *pos / *dur < 0.95)
+            .map(|(pos, _)| pos);
+
+        let sock_path = format!("/tmp/animecix-mpv-{tid}-{season}-{episode}.sock");
+        let _ = std::fs::remove_file(&sock_path);
+
+        let auto_fullscreen = self.settings.borrow().auto_fullscreen;
+        let aniskip = if self.settings.borrow().aniskip_enabled {
+            self.client.fetch_aniskip_timestamps(&title.name, episode)
+        } else {
+            api::AniSkipTimes::default()
+        };
+
+        let fmt_sec = |sec: f64| -> String {
+            let s = sec as u64;
+            format!("{:02}:{:02}", s / 60, s % 60)
+        };
+
+        let skip_cmd = if let (Some(st), Some(et)) = (aniskip.op_start, aniskip.op_end) {
+            format!("s seek {et:.1} absolute; show-text \"⏩ İntro Atlandı (AniSkip: {} → {})\" 3000\n", fmt_sec(st), fmt_sec(et))
+        } else {
+            "s show-text \"⚠️ İntro zamanı bulunamadı (AniSkip)\" 2500\n".to_string()
+        };
+
+        let outro_cmd = if let (Some(st), Some(et)) = (aniskip.ed_start, aniskip.ed_end) {
+            format!("e seek {et:.1} absolute; show-text \"⏩ Outro Atlandı (AniSkip: {} → {})\" 3000\n", fmt_sec(st), fmt_sec(et))
+        } else {
+            "e show-text \"⚠️ Outro zamanı bulunamadı (AniSkip)\" 2500\n".to_string()
+        };
+
+        let cmd_file = format!("/tmp/animecix-cmd-{tid}.cmd");
+        let _ = std::fs::remove_file(&cmd_file);
+
+        let input_conf_path = format!("/tmp/animecix-input-{tid}.conf");
+        let input_conf_content = format!(
+            "{skip_cmd}\
+             {outro_cmd}\
+             S seek -30; show-text \"⏪ 30s Geri\" 2000\n\
+             n run \"sh\" \"-c\" \"echo next > {cmd_file}\"; show-text \"⏳ Sonraki Bölüm Yükleniyor...\" 4000\n\
+             N run \"sh\" \"-c\" \"echo next > {cmd_file}\"; show-text \"⏳ Sonraki Bölüm Yükleniyor...\" 4000\n\
+             p run \"sh\" \"-c\" \"echo prev > {cmd_file}\"; show-text \"⏳ Önceki Bölüm Yükleniyor...\" 4000\n\
+             P run \"sh\" \"-c\" \"echo prev > {cmd_file}\"; show-text \"⏳ Önceki Bölüm Yükleniyor...\" 4000\n"
+        );
+        let _ = std::fs::write(&input_conf_path, input_conf_content);
+
+        let progress = self.progress.clone();
+        let progress_bars = self.progress_bars.clone();
+        let client = self.client.clone();
+        let toast = self.toast.clone();
+
+        let t = adw::Toast::new(&format!(
+            "▶ {media_title} açılıyor…{}",
+            saved_pos.map(|p| {
+                let s = p as u64;
+                if s >= 3600 { format!(" ({}:{:02}:{:02}'den)", s/3600, (s%3600)/60, s%60) }
+                else { format!(" ({}:{:02}'den)", s/60, s%60) }
+            }).unwrap_or_default()
+        ));
+        t.set_timeout(3);
+        self.toast.add_toast(t);
+
+        let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        // Şu an izlenen bölüm (sonraki bölüme geçişte güncellenir) — ilerleme ve "izlendi"
+        // işaretlemesi bunun üzerinden yapılır, böylece sonraki bölüm izlenmeden tamamlanmaz.
+        let current_shared = std::sync::Arc::new(std::sync::Mutex::new((episode, season)));
+
+        // Worker/supervisor iş parçacıklarından ana iş parçacığına toast bildirimi (GObject'lar Send değil)
+        let (toast_tx, toast_rx) = std::sync::mpsc::channel::<String>();
+        {
+            let toast_rx = std::sync::Arc::new(std::sync::Mutex::new(toast_rx));
+            let alive_toast = alive.clone();
+            let toast_h = toast.clone();
+            glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
+                let rx = toast_rx.lock().unwrap();
+                let mut msg: Option<String> = None;
+                loop {
+                    match rx.try_recv() {
+                        Ok(m) => msg = Some(m),
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                    }
+                }
+                drop(rx);
+                if let Some(m) = msg {
+                    let tt = adw::Toast::new(&m);
+                    tt.set_timeout(3);
+                    toast_h.add_toast(tt);
+                }
+                if !alive_toast.load(std::sync::atomic::Ordering::Relaxed) {
+                    glib::ControlFlow::Break
+                } else {
+                    glib::ControlFlow::Continue
+                }
+            });
+        }
+
+        // İzleme (progress / n-p / aniskip) işçi iş parçacığı — tüm denemeler boyunca yaşar
+        {
+            let alive = alive.clone();
+            let sock_poll = sock_path.clone();
+            let sock_c = sock_path.clone();
+            let cmd_c = cmd_file.clone();
+            let aniskip_c = aniskip.clone();
+            let client_c = client.clone();
+            let title_c = title.clone();
+            let ep_c = ep.clone();
+            let current_shared_c = current_shared.clone();
+            let (sender, receiver) = std::sync::mpsc::channel::<(f64, f64)>();
+            std::thread::spawn(move || {
+                let mut current_ep = ep_c.episode;
+                let current_season = ep_c.season;
+                let mut op_prompted = false;
+                let mut ed_prompted = false;
+
+                // Soket belirene kadar bekle
+                while alive.load(std::sync::atomic::Ordering::Relaxed)
+                    && !std::path::Path::new(&sock_poll).exists()
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+                if !alive.load(std::sync::atomic::Ordering::Relaxed) { return; }
+
+                loop {
+                    if std::path::Path::new(&sock_c).exists() {
+                        // MPV içi 'n' / 'p' kısayolu
+                        if std::path::Path::new(&cmd_c).exists() {
+                            if let Ok(cmd_str) = std::fs::read_to_string(&cmd_c) {
+                                let _ = std::fs::remove_file(&cmd_c);
+                                let target_ep = if cmd_str.trim() == "next" {
+                                    current_ep + 1
+                                } else if current_ep > 1 {
+                                    current_ep - 1
+                                } else {
+                                    1
+                                };
+                                if target_ep != current_ep {
+                                    let target = Episode {
+                                        episode: target_ep,
+                                        season: current_season,
+                                        name: format!("Bölüm {target_ep}"),
+                                    };
+                                    if let Ok(next_url) = client_c.resolve(title_c.id, target_ep, current_season) {
+                                        current_ep = target_ep;
+                                        op_prompted = false;
+                                        ed_prompted = false;
+                                        let json_cmd = format!("{{\"command\":[\"loadfile\", \"{}\"]}}\n", next_url);
+                                        crate::player::send_mpv_cmd(&sock_c, &json_cmd);
+                                        let json_osd = format!("{{\"command\":[\"show-text\", \"▶️ Bölüm {} Açıldı\", 3000]}}\n", target_ep);
+                                        crate::player::send_mpv_cmd(&sock_c, &json_osd);
+                                        let w = api::Watched { title_id: title_c.id, episode: target_ep, season: current_season };
+                                        client_c.set_current(&w);
+                                        client_c.add_history(&title_c, &target);
+                                        *current_shared_c.lock().unwrap() = (target_ep, current_season);
+                                    } else {
+                                        crate::player::send_mpv_cmd(&sock_c, "{\"command\":[\"show-text\", \"⚠️ Sonraki Bölüm Bulunamadı\", 3000]}\n");
+                                    }
+                                }
+                            }
+                        }
+
+                        let (pos, dur) = crate::player::query_mpv_position(&sock_c).unwrap_or((0.0, 0.0));
+                        if let Some(st) = aniskip_c.op_start {
+                            if !op_prompted && pos >= (st - 1.5) && pos <= (st + 10.0) {
+                                op_prompted = true;
+                                crate::player::send_mpv_cmd(&sock_c, "{\"command\":[\"show-text\", \"⏩ İntro Başladı ('s' ile atlayabilirsiniz)\", 7000]}\n");
+                            }
+                        }
+                        if let Some(st) = aniskip_c.ed_start {
+                            if !ed_prompted && pos >= (st - 1.5) && pos <= (st + 10.0) {
+                                ed_prompted = true;
+                                crate::player::send_mpv_cmd(&sock_c, "{\"command\":[\"show-text\", \"🏁 Outro Başladı ('n' ile Sonraki Bölüm)\", 7000]}\n");
+                            }
+                        }
+                        if sender.send((pos, dur)).is_err() { break; }
+                    } else {
+                        if !alive.load(std::sync::atomic::Ordering::Relaxed) { break; }
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                        continue;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+            });
+
+            let progress2 = progress.clone();
+            let progress_bars2 = progress_bars.clone();
+            let client_prog = client.clone();
+            let pk = prog_key.clone();
+            let receiver = std::sync::Arc::new(std::sync::Mutex::new(receiver));
+            let current_shared_t = current_shared.clone();
+            let mut marked_ep: Option<(u64, u64)> = None;
+            glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
+                let rx = receiver.lock().unwrap();
+                let mut latest: Option<(f64, f64)> = None;
+                let mut disconnected = false;
+                loop {
+                    match rx.try_recv() {
+                        Ok(v) => { latest = Some(v); }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => { disconnected = true; break; }
+                    }
+                }
+                drop(rx);
+                let cur = *current_shared_t.lock().unwrap();
+
+                if disconnected {
+                    let last = progress2.borrow().get(&pk).copied();
+                    if let Some((pos, dur)) = last {
+                        client_prog.save_progress(tid, cur.1, cur.0, pos, dur);
+                    }
+                    return glib::ControlFlow::Break;
+                }
+
+                if let Some((pos, dur)) = latest {
+                    if pos < 1.0 { return glib::ControlFlow::Continue; }
+                    progress2.borrow_mut().insert(pk.clone(), (pos, dur));
+                    if let Some((pb, lbl)) = progress_bars2.borrow().get(&pk) {
+                        if dur > 0.0 {
+                            pb.set_fraction((pos / dur).clamp(0.0, 1.0));
+                            let fmt = |s: f64| -> String {
+                                let s = s as u64;
+                                if s >= 3600 { format!("{}:{:02}:{:02}", s/3600, (s%3600)/60, s%60) }
+                                else { format!("{}:{:02}", s/60, s%60) }
+                            };
+                            lbl.set_text(&format!("{} / {}", fmt(pos), fmt(dur)));
+                            lbl.set_visible(true);
+                            pb.set_visible(true);
+                        }
+                    }
+                    client_prog.save_progress(tid, cur.1, cur.0, pos, dur);
+                    // İzlenme eşiği aşıldıysa bölümü "izlendi" işaretle. Sonraki bölüme geçerken
+                    // izlenmeden tamamlanmasın diye işaretleme yalnızca burada yapılır.
+                    if api::Client::played_enough(pos, dur) && marked_ep != Some(cur) {
+                        client_prog.save_watched(&api::Watched { title_id: tid, episode: cur.0, season: cur.1 }, "");
+                        marked_ep = Some(cur);
+                    }
+                }
+                glib::ControlFlow::Continue
+            });
+        }
+
+        // Kaynak deneme (supervisor) iş parçacığı — en iyi kaliteli önce, başarısız olursa sıradakine geç
+        {
+            let alive = alive.clone();
+            let sock_path_c = sock_path.clone();
+            let cmd_file_c = cmd_file.clone();
+            let input_conf_path_c = input_conf_path.clone();
+            let media_title_c = media_title.clone();
+            let toast_tx_c = toast_tx.clone();
+            let saved_pos_c = saved_pos;
+            let auto_fullscreen_c = auto_fullscreen;
+            let candidates: Vec<String> = candidates.to_vec();
+            std::thread::spawn(move || {
+                for (i, url) in candidates.iter().enumerate() {
+                    let _ = std::fs::remove_file(&cmd_file_c);
+                    let _ = std::fs::remove_file(&sock_path_c);
+                    let mut cmd = std::process::Command::new("mpv");
+                    cmd.arg("--user-agent=mozilla")
+                        .arg(format!("--force-media-title={media_title_c}"))
+                        .arg("--keep-open=yes")
+                        .arg(format!("--input-ipc-server={sock_path_c}"));
+                    if auto_fullscreen_c { cmd.arg("--fullscreen"); }
+                    cmd.arg(format!("--input-conf={input_conf_path_c}"));
+                    cmd.args(saved_pos_c.map(|p| format!("--start={p:.1}")).as_slice())
+                        .arg("--cache=yes")
+                        .arg("--demuxer-max-bytes=128MiB")
+                        .arg("--demuxer-max-back-bytes=32MiB")
+                        .arg("--demuxer-readahead-secs=120")
+                        .arg("--cache-pause=yes")
+                        .arg("--cache-pause-wait=3")
+                        .arg("--cache-secs=120")
+                        .arg("--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5")
+                        .arg("--network-timeout=10")
+                        .arg("--hwdec=auto-safe")
+                        .arg("--ytdl-format=bestvideo[height<=1080]+bestaudio/best")
+                        .arg(url);
+                    let mut child = match cmd.spawn() {
+                        Ok(c) => c,
+                        Err(e) => { eprintln!("mpv başlatılamadı: {e}"); continue; }
+                    };
+
+                    let start = std::time::Instant::now();
+                    let mut playing = false;
+                    loop {
+                        let sock_exists = std::path::Path::new(&sock_path_c).exists();
+                        if sock_exists {
+                            if let Some((_, dur)) = crate::player::query_mpv_position(&sock_path_c) {
+                                if dur > 0.0 { playing = true; break; }
+                            }
+                        }
+                        match child.try_wait() {
+                            Ok(Some(_)) => break,
+                            Ok(None) => {}
+                            Err(_) => break,
+                        }
+                        if start.elapsed() > std::time::Duration::from_secs(20) { break; }
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                    }
+
+                    if playing {
+                        let _ = child.wait();
+                        break;
+                    } else {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        if i + 1 < candidates.len() {
+                            let _ = toast_tx_c.send("Kaynak açılamadı, diğer kaynağa geçiliyor…".to_string());
+                            continue;
+                        } else {
+                            let _ = toast_tx_c.send("Bölüm hiçbir kaynakta açılamadı.".to_string());
+                            break;
+                        }
+                    }
+                }
+                alive.store(false, std::sync::atomic::Ordering::SeqCst);
+                let _ = std::fs::remove_file(&sock_path_c);
+            });
+        }
     }
 
     fn do_search(&self, q: String) {

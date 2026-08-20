@@ -728,8 +728,9 @@ impl Client {
         Err(format!("embed bulunamadı: {final_url}"))
     }
 
-    /// Direct mp4 URL'si döner — tüm kaynakları paralel çözer, en yüksek kaliteliyi seçer
-    pub fn resolve(&self, title_id: u64, episode: u64, season: u64) -> Result<String, String> {
+    /// Bölüm için tüm çözülmüş kaynakları (boyut = kalite sırasıyla, en iyi önce) döner.
+    /// `resolve` yalnızca en iyisini, `resolve_all` hepsini (fallback için) döndürür.
+    fn resolve_ranked(&self, title_id: u64, episode: u64, season: u64) -> Result<Vec<(u64, String)>, String> {
         let key = format!("evp:{title_id}:{season}:{episode}");
         let d = self.cache_get(&key, 1800, |http| {
             http.get(format!("{BASE}/secure/episode-videos-points"))
@@ -749,7 +750,8 @@ impl Client {
         let videos = d["videos"].as_array().cloned().unwrap_or_default();
         if videos.is_empty() {
             let (embed_id, vid) = self.find_embed(title_id, episode, season)?;
-            return self.tau_resolve(&embed_id, &vid);
+            let url = self.tau_resolve(&embed_id, &vid)?;
+            return Ok(vec![(0, url)]);
         }
         let points = &d["translatorPoints"];
 
@@ -788,8 +790,8 @@ impl Client {
             if candidates.len() >= 8 { break; }
         }
 
-        // Tüm adayları paralel çözümlе, her birinin boyutunu kontrol et
-        let found: Option<(u64, String)> = std::thread::scope(|scope| {
+        // Tüm adayları paralel çözümle, her birinin boyutunu kontrol et
+        let found: Vec<(u64, String)> = std::thread::scope(|scope| {
             let (tx, rx) = std::sync::mpsc::channel();
             for u in candidates {
                 let tx = tx.clone();
@@ -806,25 +808,28 @@ impl Client {
                 });
             }
             drop(tx);
-            // En büyük dosya boyutunu (en yüksek kalite) seç
-            let mut best: Option<(u64, String)> = None;
-            for (size, url) in rx.iter() {
-                if let Some((ref mut best_size, _)) = best {
-                    if size > *best_size {
-                        *best_size = size;
-                        best = Some((size, url));
-                    }
-                } else {
-                    best = Some((size, url));
-                }
-            }
-            best
+            rx.iter().collect()
         });
 
-        match found {
-            Some((_, mp4)) => Ok(mp4),
-            None => Err("Bölüm videosu çözülemedi".to_string()),
+        if found.is_empty() {
+            Err("Bölüm videosu çözülemedi".to_string())
+        } else {
+            Ok(found)
         }
+    }
+
+    /// Direct mp4 URL'si döner — tüm kaynakları paralel çözer, en yüksek kaliteliyi seçer
+    pub fn resolve(&self, title_id: u64, episode: u64, season: u64) -> Result<String, String> {
+        let mut found = self.resolve_ranked(title_id, episode, season)?;
+        found.sort_by(|a, b| b.0.cmp(&a.0));
+        found.into_iter().next().map(|(_, url)| url).ok_or_else(|| "Bölüm videosu çözülemedi".to_string())
+    }
+
+    /// Tüm çözülmüş kaynakları kalite sırasıyla (en iyi önce) döner — fallback için
+    pub fn resolve_all(&self, title_id: u64, episode: u64, season: u64) -> Result<Vec<String>, String> {
+        let mut found = self.resolve_ranked(title_id, episode, season)?;
+        found.sort_by(|a, b| b.0.cmp(&a.0));
+        Ok(found.into_iter().map(|(_, url)| url).collect())
     }
 
     /// Bölüm için mevcut tüm kaynakları listele (çözümlenmemiş, sadece metadata)
@@ -1362,6 +1367,24 @@ impl Client {
             .unwrap_or(false)
     }
 
+    /// Yalnızca "şu an izlenen" (continue watching) durumunu günceller; izlendi listesine
+    /// EKLEMEZ. Böylece bir bölüme geçildiğinde izlenmeden "tamamlandı" işaretlenmez.
+    pub fn set_current(&self, w: &Watched) {
+        let mut st = self.load_state();
+        st.current = Some(Watched {
+            title_id: w.title_id,
+            episode: w.episode,
+            season: w.season,
+        });
+        self.save_state(&st);
+    }
+
+    /// Bir bölümün "izlendi" sayılması için yeterince izlenip izlenmediğini döner.
+    /// İlerleme sürenin %90'ına ulaştıysa tamamlandı kabul edilir.
+    pub fn played_enough(pos: f64, dur: f64) -> bool {
+        dur > 0.0 && (pos / dur) >= 0.9
+    }
+
     /// bölümü izlendi listesinden kaldır
     pub fn remove_watched(&self, title_id: u64, season: u64, episode: u64) {
         let mut st = self.load_state();
@@ -1800,5 +1823,43 @@ mod tests {
         st2.marathon.retain(|x| x.title.id != 777);
         c.save_state(&st2);
         let _ = std::fs::remove_file(&lists_path);
+    }
+
+    #[test]
+    fn next_episode_not_marked_watched_before_playing() {
+        // Sonraki bölüme geçiş (set_current) izlenmeden "tamamlandı" işaretlememeli;
+        // izlendi işareti yalnızca izlenme eşiği aşılınca konmalı.
+        let c = Client::new();
+        let tid: u64 = 999_991;
+        let w1 = Watched { title_id: tid, episode: 1, season: 0 };
+        let w2 = Watched { title_id: tid, episode: 2, season: 0 };
+
+        // Açılışta yalnızca "şu an izlenen" güncellenir
+        c.set_current(&w1);
+        assert!(!c.is_watched(tid, 0, 1), "açılan bölüm henüz izlenmedi sayılmamalı");
+
+        // İzlenme eşiği politikası
+        assert!(Client::played_enough(95.0, 100.0), ">=%90 izlendi sayılmalı");
+        assert!(!Client::played_enough(45.0, 100.0), "<%90 izlenmedi sayılmalı");
+        assert!(!Client::played_enough(0.0, 0.0), "süresiz içerik izlenmiş sayılmaz");
+
+        // Eşik aşılınca işaretlenir
+        c.save_watched(&w1, "");
+        assert!(c.is_watched(tid, 0, 1), "eşik aşılınca izlendi sayılmalı");
+
+        // Sonraki bölüme geçiş izlenmeden tamamlamamalı
+        c.set_current(&w2);
+        assert!(!c.is_watched(tid, 0, 2), "sonraki bölüm geçişte izlenmeden tamamlanmamalı");
+
+        // Sonraki bölüm de izlenince işaretlenir
+        c.save_watched(&w2, "");
+        assert!(c.is_watched(tid, 0, 2), "sonraki bölüm izlenince işaretlenmeli");
+
+        // temizlik: gerçek state dosyasını kirletmeyelim
+        c.remove_watched(tid, 0, 1);
+        c.remove_watched(tid, 0, 2);
+        let mut st = c.load_state();
+        st.current = None;
+        c.save_state(&st);
     }
 }
