@@ -65,11 +65,18 @@ def walk(node, pred):
     return None
 
 
+def role_name(n):
+    try:
+        return str(n.getRole()).lower()
+    except Exception:
+        return ""
+
+
 def find_button(root, *labels):
     labels = [l.lower() for l in labels]
     def pred(n):
         try:
-            return str(n.getRole()) == "push button" and (n.name or "").lower() in labels
+            return "button" in role_name(n) and (n.name or "").lower() in labels
         except Exception:
             return False
     return walk(root, pred)
@@ -145,8 +152,9 @@ else:
 # 4) Bölümler: Ana Sayfa'ya dön, ilk başlık kartına tıkla
 go_home(root)
 time.sleep(1.0)
-card = walk(root, lambda n: str(n.getRole()) in ("list item", "table cell")
-            and (n.name or "").strip() != "")
+card = walk(root, lambda n: ("button" in role_name(n)
+            or "list item" in role_name(n) or "cell" in role_name(n)
+            or "panel" in role_name(n)) and (n.name or "").strip() != "")
 if card:
     click(card)
     time.sleep(2.0)
