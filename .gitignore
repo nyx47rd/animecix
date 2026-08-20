@@ -1,3 +1,15 @@
 /target
 *.log
 state.json
+
+# === Build artefaktları (GitHub'a gönderilmez) ===
+*.AppImage
+AnimeciX.AppDir/
+appimagetool-x86_64.AppImage
+assets/hicolor/index.theme
+
+# === Kalıntı / scratch dosyalar (yalnızca local'de kalır) ===
+demo.sh
+src/bin/probe.rs
+src/bin/scrolltest.rs
+src/ui/source_dialog.rs
