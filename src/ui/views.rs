@@ -182,6 +182,7 @@ impl MarathonView {
             status_badge.add_css_class(if item.completed { "status-badge-completed" } else { "status-badge-progress" });
             title_row.append(&name_lbl);
             title_row.append(&status_badge);
+            info_box.append(&title_row);
             let sub_lbl = gtk::Label::new(Some(&item.title.meta_line()));
             sub_lbl.add_css_class("dim-label");
             sub_lbl.set_xalign(0.0);
