@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
-"""AnimeciX ekran görüntüleri - TAM OTOMATIK yakalama (KDE Plasma / Wayland).
+"""AnimeciX ekran görüntüleri - TAM OTOMATIK (--goto CLI ile, a11y gerektirmez).
 
-GTK a11y (AT-SPI) üzerinden butonları isimleriyle bulup tıklar, her sayfayı
-`spectacle` ile kaydeder. Kullanıcı müdahalesi gerekmez.
+Her sayfa için AppImage'i `--goto <sayfa>` ile başlatır, belirli süre bekler,
+`spectacle` ile aktif pencereyi yakalar, sonra kapatır. Kullanıcı müdahalesi yok.
 
 Gereksinimler:
   - spectacle  (KDE ekran görüntüsü aracı)
-  - python3-pyatspi  (Debian/Ubuntu: sudo apt install python3-pyatspi)
-                     (Arch:          sudo pacman -S python-at-spi)
-                     (Fedora:        sudo dnf install python3-pyatspi)
-  - AppImage repo kökünde: ./AnimeciX-x86_64.AppImage
+  - ./AnimeciX-x86_64.AppImage  (v3.2.0+)  -> Releases'dan indir, repo köküne koy
 
 Kullanım:
   python3 capture_auto.py
@@ -19,149 +16,50 @@ import sys
 import time
 import subprocess
 
-try:
-    import pyatspi
-except ImportError:
-    sys.exit("HATA: pyatspi yok. Kurulum: sudo apt install python3-pyatspi "
-             "(veya pacman/dnf karşılığı).")
-
 APP = "./AnimeciX-x86_64.AppImage"
 if not os.path.exists(APP):
     APP = "AnimeciX-x86_64.AppImage"
 if not os.path.exists(APP):
-    sys.exit(f"HATA: {APP} bulunamadı (repo köküne koy).")
+    sys.exit(f"HATA: {APP} bulunamadı (v3.2.0+ indir, repo köküne koy).")
 
 os.makedirs("screenshots", exist_ok=True)
 
-
-def log(msg):
-    print(f"[capture_auto] {msg}", flush=True)
-
-
-def find_app():
-    desktop = pyatspi.Registry.getDesktop(0)
-    for app in desktop:
-        name = (app.name or "").lower()
-        if "animecix" in name:
-            return app
-    return None
-
-
-def walk(node, pred):
-    """pred(node) -> bool; ilk eşleşenizi döndürür (BFS)."""
-    stack = [node]
-    while stack:
-        n = stack.pop()
-        try:
-            if pred(n):
-                return n
-        except Exception:
-            pass
-        try:
-            for c in n:
-                stack.append(c)
-        except Exception:
-            pass
-    return None
-
-
-def role_name(n):
-    try:
-        return str(n.getRole()).lower()
-    except Exception:
-        return ""
-
-
-def find_button(root, *labels):
-    labels = [l.lower() for l in labels]
-    def pred(n):
-        try:
-            return "button" in role_name(n) and (n.name or "").lower() in labels
-        except Exception:
-            return False
-    return walk(root, pred)
-
-
-def click(obj):
-    try:
-        ai = obj.queryAction()
-        for i in range(ai.nActions):
-            if ai.getName(i).lower() in ("click", "activate", "press"):
-                ai.doAction(i)
-                return True
-    except Exception as e:
-        log(f"  tiklama hatasi: {e}")
-    return False
+# (--goto argümanı, dosya adı, bekleme sn)
+PAGES = [
+    ("welcome",   "welcome",   3),
+    ("home",      "home",      4),
+    ("favorites", "favorites", 4),
+    ("marathon",  "marathon",  4),
+    ("history",   "history",   4),
+    ("settings",  "settings",  4),
+    ("search",    "search",    6),
+    ("episodes",  "episodes",  8),
+]
 
 
 def shot(name):
     subprocess.run(["spectacle", "-a", "-b", "-o", f"screenshots/{name}.png"],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    log(f"kaydedildi: screenshots/{name}.png")
+    print(f"[capture_auto] kaydedildi: screenshots/{name}.png", flush=True)
 
 
-def go_home(root):
-    # Geri butonuna basarak Ana Sayfa'ya dönmeye çalış
-    for _ in range(6):
-        b = find_button(root, "geri")
-        if not b:
-            break
-        if not click(b):
-            break
-        time.sleep(0.8)
+def kill():
+    subprocess.run(["pkill", "-f", "AnimeciX-x86_64"], check=False)
+    time.sleep(1.2)
 
 
-log("AppImage başlatılıyor...")
-subprocess.Popen([APP], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-time.sleep(6)
+def main():
+    for arg, name, wait in PAGES:
+        print(f"[capture_auto] '{arg}' açılıyor (bekleniyor {wait}s)...", flush=True)
+        kill()  # önceki süreç kalıntı bırakmasın
+        subprocess.Popen([APP, "--goto", arg],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(wait)
+        shot(name)
+    kill()
+    print("[capture_auto] Bitti. Görseller screenshots/ içinde.")
+    print("Sonra: git add screenshots && git commit -m screenshots && git push")
 
-root = find_app()
-if not root:
-    sys.exit("HATA: AnimeciX a11y ağacında bulunamadı (at-spi çalışıyor mu?)")
 
-# 1) Ana Sayfa (başlangıç)
-shot("home")
-time.sleep(1.2)
-
-# 2) Favoriler / Maraton / Geçmiş / Ayarlar
-for label, fname in [("Favoriler", "favorites"), ("Maraton", "marathon"),
-                     ("Geçmiş", "history"), ("Ayarlar", "settings")]:
-    b = find_button(root, label)
-    if b:
-        click(b)
-        time.sleep(1.5)
-        shot(fname)
-    else:
-        log(f"UYARI: buton bulunamadı -> {label}")
-
-# 3) Arama (arama butonu yoksa Ctrl+S kısayolu)
-b = find_button(root, "arama yap", "ara", "search")
-if b:
-    click(b)
-    time.sleep(1.5)
-    shot("search")
-else:
-    log("UYARI: arama butonu bulunamadı; Ctrl+S deneniyor")
-    try:
-        subprocess.run(["xdotool", "key", "ctrl+s"], check=False)
-        time.sleep(1.5)
-        shot("search")
-    except Exception:
-        log("  arama atlandi")
-
-# 4) Bölümler: Ana Sayfa'ya dön, ilk başlık kartına tıkla
-go_home(root)
-time.sleep(1.0)
-card = walk(root, lambda n: ("button" in role_name(n)
-            or "list item" in role_name(n) or "cell" in role_name(n)
-            or "panel" in role_name(n)) and (n.name or "").strip() != "")
-if card:
-    click(card)
-    time.sleep(2.0)
-    shot("episodes")
-    go_home(root)
-else:
-    log("UYARI: bölüm kartı bulunamadı (ağ/Liste boş olabilir) -> episodes atlandi")
-
-log("Bitti. Görseller screenshots/ içinde.")
-log("Sonra: git add screenshots && git commit -m screenshots && git push")
+if __name__ == "__main__":
+    main()
