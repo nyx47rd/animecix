@@ -412,21 +412,38 @@ pub fn check_and_auto_update_installation() {
     }
 }
 
+/// Masaüstü kısayolunun `Exec` hedefi:
+/// - AppImage olarak çalışıyorsak: AppImage dosyasının yolu (`APPIMAGE` ortam değişkeni).
+///   Böylece kısayol AppImage runtime'ını çalıştırır, `APPIMAGE` set olur ve otomatik
+///   güncelleme çalışır.
+/// - Kaynak derleme ise: `~/.local/bin/animecix`
+pub fn desktop_exec_target(home: &str) -> String {
+    if let Some(ai) = std::env::var("APPIMAGE").ok().filter(|s| !s.trim().is_empty()) {
+        ai
+    } else {
+        format!("{home}/.local/bin/animecix")
+    }
+}
+
 pub fn install_desktop_entry() -> Result<(), String> {
     let home = std::env::var("HOME").map_err(|_| "HOME klasörü bulunamadı".to_string())?;
 
-    let bin_dir = format!("{home}/.local/bin");
-    let target_bin = format!("{bin_dir}/animecix");
-    let _ = std::fs::create_dir_all(&bin_dir);
-
-    // AppImage veya çalıştırılabilir dosyayı kalıcı ~/.local/bin/animecix konumuna kopyala
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Ok(bytes) = std::fs::read(&exe_path) {
-            let _ = std::fs::write(&target_bin, &bytes);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(&target_bin, std::fs::Permissions::from_mode(0o755));
+    let exec_target = desktop_exec_target(&home);
+    if std::env::var("APPIMAGE").map(|s| !s.trim().is_empty()).unwrap_or(false) {
+        // Eski entegrasyondan kalmış yanlış ikili kopyasını temizle (artık kullanılmıyor)
+        let _ = std::fs::remove_file(format!("{home}/.local/bin/animecix"));
+    } else {
+        // Kaynak derleme: ikiliyi ~/.local/bin/animecix'e kopyala
+        let bin_dir = format!("{home}/.local/bin");
+        let _ = std::fs::create_dir_all(&bin_dir);
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Ok(bytes) = std::fs::read(&exe_path) {
+                let _ = std::fs::write(&exec_target, &bytes);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(&exec_target, std::fs::Permissions::from_mode(0o755));
+                }
             }
         }
     }
@@ -455,7 +472,7 @@ pub fn install_desktop_entry() -> Result<(), String> {
          Type=Application\n\
          Name=AnimeciX\n\
          Comment=Türkçe Anime ve Film İzleme İstemcisi\n\
-         Exec=\"{target_bin}\"\n\
+         Exec=\"{exec_target}\"\n\
          Icon=tr.com.animecix\n\
          Terminal=false\n\
          Categories=AudioVideo;Video;Network;\n\
@@ -537,4 +554,28 @@ fn detect_distro_info() -> (&'static str, &'static str) {
         }
     }
     ("Linux", "sudo apt install mpv   # ya da dnf/pacman/zypper install mpv")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn desktop_exec_target_uses_appimage() {
+        std::env::set_var("APPIMAGE", "/opt/AnimeciX-x86_64.AppImage");
+        assert_eq!(
+            desktop_exec_target("/home/x"),
+            "/opt/AnimeciX-x86_64.AppImage"
+        );
+        std::env::remove_var("APPIMAGE");
+    }
+
+    #[test]
+    fn desktop_exec_target_falls_back_to_local_bin() {
+        std::env::remove_var("APPIMAGE");
+        assert_eq!(
+            desktop_exec_target("/home/x"),
+            "/home/x/.local/bin/animecix"
+        );
+    }
 }
