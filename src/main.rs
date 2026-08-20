@@ -348,8 +348,21 @@ fn main() {
             check_and_auto_update_installation();
         }
         let app_inst = App::new(app);
-        if app_inst.settings.borrow().auto_update {
-            update::check_and_prompt(&app_inst.window, false);
+        let (auto_update, notify_uptodate) = {
+            let s = app_inst.settings.borrow();
+            (s.auto_update, s.notify_uptodate)
+        };
+        if auto_update {
+            let app_c = app_inst.clone();
+            update::check_and_prompt(
+                &app_inst.window,
+                notify_uptodate,
+                move || {
+                    let mut s = app_c.settings.borrow_mut();
+                    s.notify_uptodate = false;
+                    app_c.client.save_settings(&s);
+                },
+            );
         }
         app_inst.window.present();
     });

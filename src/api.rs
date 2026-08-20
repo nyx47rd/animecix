@@ -163,6 +163,9 @@ pub struct Settings {
     /// Uygulama başlatmada yeni sürümü kontrol edip (AppImage ise) kendini günceller
     #[serde(default = "default_true")]
     pub auto_update: bool,
+    /// Başlatmada güncel sürümdeyken "Güncel" bildirimini göster
+    #[serde(default = "default_true")]
+    pub notify_uptodate: bool,
 }
 fn default_loading() -> String { "overlay".into() }
 fn default_quick_search() -> bool { true }
@@ -179,6 +182,7 @@ impl Default for Settings {
             auto_fullscreen: default_true(),
             aniskip_enabled: default_true(),
             auto_update: default_true(),
+            notify_uptodate: default_true(),
         }
     }
 }

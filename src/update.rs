@@ -104,7 +104,12 @@ pub fn replace_target(bytes: &[u8], target: &Path) -> Result<(), String> {
 }
 
 /// Güncelleme varsa onay dialogu gösterir. `show_if_uptodate` true ise güncelken de bilgi verir.
-pub fn check_and_prompt<W: IsA<gtk::Window>>(window: &W, show_if_uptodate: bool) {
+/// `on_suppress_uptodate`, güncel sürüm bildirimi "Bir Daha Gösterme" ile kapatıldığında çağrılır.
+pub fn check_and_prompt<W: IsA<gtk::Window>>(
+    window: &W,
+    show_if_uptodate: bool,
+    on_suppress_uptodate: impl Fn() + 'static,
+) {
     if !is_appimage() {
         if show_if_uptodate {
             present_info(window, "Güncelleme Kullanılamıyor", "Otomatik güncelleme yalnızca AppImage sürümünde çalışır.");
@@ -132,6 +137,7 @@ pub fn check_and_prompt<W: IsA<gtk::Window>>(window: &W, show_if_uptodate: bool)
 
     // Ana thread: kanalı poll et, sonuç gelince dialog'u oluştur (widget yalnızca burada).
     let win = window.clone();
+    let mut on_suppress = Some(on_suppress_uptodate);
     glib::idle_add_local(move || match rx.try_recv() {
         Ok(Ok(Some((tag, url)))) => {
             present_update_dialog(&win, &tag, &url);
@@ -139,7 +145,9 @@ pub fn check_and_prompt<W: IsA<gtk::Window>>(window: &W, show_if_uptodate: bool)
         }
         Ok(Ok(None)) => {
             if show_if_uptodate {
-                present_info(&win, "Güncel", "AnimeciX güncel sürümde.");
+                if let Some(f) = on_suppress.take() {
+                    present_uptodate(&win, f);
+                }
             }
             ControlFlow::Break
         }
@@ -158,6 +166,28 @@ fn present_info<W: IsA<gtk::Window>>(window: &W, heading: &str, body: &str) {
         .body(body)
         .build();
     dialog.set_transient_for(Some(window));
+    dialog.present();
+}
+
+/// Güncel sürüm bildirimi: "Tamam" ile kapanır; "Bir Daha Gösterme" ile
+/// `on_suppress` çağrılır (ayarlarda `notify_uptodate` kapatılır).
+fn present_uptodate<W: IsA<gtk::Window>>(window: &W, on_suppress: impl Fn() + 'static) {
+    let dialog = adw::MessageDialog::builder()
+        .heading("Güncel")
+        .body("AnimeciX güncel sürümde 🎉")
+        .close_response("ok")
+        .default_response("ok")
+        .build();
+    dialog.add_response("suppress", "Bir Daha Gösterme");
+    dialog.add_response("ok", "Tamam");
+    dialog.set_response_appearance("ok", adw::ResponseAppearance::Suggested);
+    dialog.set_transient_for(Some(window));
+    dialog.connect_response(None, move |dlg, resp| {
+        if resp == "suppress" {
+            on_suppress();
+        }
+        dlg.close();
+    });
     dialog.present();
 }
 
