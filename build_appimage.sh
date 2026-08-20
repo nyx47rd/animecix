@@ -45,7 +45,7 @@ publish_release() {
     -H "Authorization: Bearer $token" \
     -H "Accept: application/vnd.github+json" \
     -H "Content-Type: application/json" \
-    -d "{\"tag_name\":\"v$VERSION\",\"name\":\"AnimeciX v$VERSION\",\"body\":\"Otomatik derleme.\\n\\nAppImage tek dosyadır; uygulama başlatmada yeni sürümü kontrol eder ve kendini günceller (veya eski AppImage dosyasının üstüne yenisini koyabilirsiniz).\",\"make_latest\":true}" \
+    -d "{\"tag_name\":\"v$VERSION\",\"name\":\"AnimeciX v$VERSION\",\"body\":\"Otomatik derleme.\\n\\nAppImage tek dosyadır; uygulama başlatmada yeni sürümü kontrol eder ve kendini günceller (veya eski AppImage dosyasının üstüne yenisini koyabilirsiniz).\"}" \
     "https://api.github.com/repos/$repo/releases")
   local upload_url
   upload_url=$(printf '%s' "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('upload_url',''))" 2>/dev/null)
