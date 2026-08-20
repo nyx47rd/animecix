@@ -29,11 +29,20 @@ kontrol eder ve kendini otomatik güncelleyebilir.
 
 ## Ekran Görüntüleri
 
-| | | |
-|---|---|---|
-| ![Ana Sayfa](screenshots/home.png) | ![Arama](screenshots/search.png) | ![Bölümler](screenshots/episodes.png) |
-| ![Favoriler](screenshots/favorites.png) | ![Maraton](screenshots/marathon.png) | ![Geçmiş](screenshots/history.png) |
-| ![Ayarlar](screenshots/settings.png) | ![Kurulum](screenshots/welcome.png) | |
+<div align="center">
+
+| | |
+|:---:|:---:|
+| <img src="screenshots/home.png" width="100%"> | <img src="screenshots/search.png" width="100%"> |
+| **🏠 Ana Sayfa** | **🔎 Arama** |
+| <img src="screenshots/episodes.png" width="100%"> | <img src="screenshots/favorites.png" width="100%"> |
+| **▶️ Bölüm İzleme** | **⭐ Favoriler** |
+| <img src="screenshots/marathon.png" width="100%"> | <img src="screenshots/history.png" width="100%"> |
+| **🏃 İzleme Maratonu** | **🕘 Geçmiş** |
+| <img src="screenshots/settings.png" width="100%"> | <img src="screenshots/welcome.png" width="100%"> |
+| **⚙️ Ayarlar** | **👋 Karşılama** |
+
+</div>
 
 ---
 
