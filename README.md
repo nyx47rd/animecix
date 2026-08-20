@@ -76,9 +76,6 @@ Uygulama bir **AppImage** olarak çalışıyorsa başlangıçta yeni sürümü k
 - **Otomatik:** *Ayarlar → Güncelleme → Otomatik Güncelleme* açıkken yeni sürüm bulunursa
   onay kutusu çıkar; “Güncelle ve Yeniden Başlat” deyince indirir, kurar ve uygulamayı yeniden başlatır.
 - **Elle:** *Ayarlar → Şimdi Güncelle* ile istediğin an kontrol edebilirsin.
-- **Klasik yöntem:** Yeni AppImage'i indirip eski AppImage dosyasının üstüne koyman da yeterli
-  (AppImage tek dosyadır, ayarların korunur).
-
 Kaynaktan derlenen sürümde otomatik güncelleme devre dışıdır (sadece AppImage için geçerlidir).
 
 ---
