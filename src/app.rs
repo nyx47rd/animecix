@@ -64,6 +64,17 @@ pub struct App {
 impl App {
     pub fn new(app: &adw::Application) -> Rc<Self> {
         let client = Arc::new(Client::new());
+
+        // Açılışta ağı GTK pencere kurulumuyla çakıştır: bağlantıyı ısıt (warmup) ve ana
+        // sayfa JSON'unu önceden indir (prefetch). Böylece show_page(Home)+fetch_home() çağrıldığında
+        // veri bellek önbelleğinde hazır olur; soğuk açılış ~2.3-3s'ye iner. Pencereyi bloklamaz.
+        {
+            let cl = client.clone();
+            std::thread::spawn(move || {
+                cl.warmup();
+                let _ = cl.home_lists();
+            });
+        }
         let welcome_seen = client.is_welcome_seen();
 
         let header = adw::HeaderBar::new();
