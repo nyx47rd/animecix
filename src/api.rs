@@ -182,9 +182,9 @@ impl Title {
         None
     }
 
-    /// Detay başlık kartı için dikey meta bloğu:
-    /// "24 dakika\n•\n38 bölüm\n•\n29/9/2023"
-    pub fn detail_meta(&self) -> String {
+    /// Detay kartında rozet olarak gösterilecek bilgi parçaları:
+    /// ["24 dakika", "38 bölüm", "Yayın: 29/9/2023"]
+    pub fn detail_facts(&self) -> Vec<String> {
         let mut facts: Vec<String> = Vec::new();
         if let Some(rt) = self.runtime {
             if rt > 0 {
@@ -198,21 +198,10 @@ impl Title {
         }
         if let Some(rd) = &self.release_date {
             if let Some(d) = Self::fmt_release_date(rd) {
-                facts.push(d);
+                facts.push(format!("Yayın: {d}"));
             }
         }
         facts
-            .iter()
-            .enumerate()
-            .flat_map(|(i, f)| {
-                if i == 0 {
-                    vec![f.clone()]
-                } else {
-                    vec!["•".to_string(), f.clone()]
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
     }
 
     /// Kart alt satırı için birleşik meta: "YIL  •  TÜR  •  N Sezon".
@@ -1853,7 +1842,14 @@ mod tests {
             t.genre_line(),
             Some("Dram  •  Bilim Kurgu & Fantezi  •  Aksiyon & Macera".to_string())
         );
-        assert_eq!(t.detail_meta(), "24 dakika\n•\n38 bölüm\n•\n29/9/2023");
+        assert_eq!(
+            t.detail_facts(),
+            vec![
+                "24 dakika".to_string(),
+                "38 bölüm".to_string(),
+                "Yayın: 29/9/2023".to_string()
+            ]
+        );
     }
 
     #[test]
