@@ -713,7 +713,6 @@ impl App {
 
         box_.append(&pic);
         box_.append(&lbl);
-        episodes_view::append_title_submeta(&box_, t);
 
         let gesture = gtk::GestureClick::new();
         let this = self.clone_ref();
@@ -1495,8 +1494,11 @@ impl App {
     fn open_episodes(&self, title: Title) {
         self.busy(true);
         self.spawn(move |c| {
-            let res = c.episodes(&title);
-            move || Msg::Eps(title.clone(), res)
+            // Favoriler/geçmiş/maratondan gelen başlıklar eski şemalı olabilir;
+            // detay başlığında tür/süre/yayın görünsün diye taze veriyle zenginleştir.
+            let enriched = c.enrich_title(&title);
+            let res = c.episodes(&enriched);
+            move || Msg::Eps(enriched.clone(), res)
         });
     }
 
