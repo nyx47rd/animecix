@@ -335,9 +335,10 @@ impl Client {
             .user_agent(UA)
             .redirect(reqwest::redirect::Policy::limited(10))
             .timeout(std::time::Duration::from_secs(15))
-            .connect_timeout(std::time::Duration::from_secs(6))
-            .pool_max_idle_per_host(1)
-            .pool_idle_timeout(std::time::Duration::from_secs(5))
+            .connect_timeout(std::time::Duration::from_secs(3))
+            .pool_max_idle_per_host(16)
+            .pool_idle_timeout(std::time::Duration::from_secs(60))
+            .tcp_keepalive(std::time::Duration::from_secs(60))
             .build()
             .expect("http client");
 
@@ -436,7 +437,12 @@ impl Client {
             // TTL dolmuş ama disk cache var — stale-while-revalidate:
             // Hemen stale veriyi döndür, arka planda güncellenecek
             let stale = v.clone();
-            match loader(&self.http) {
+            let t0 = std::time::Instant::now();
+            let net_res = loader(&self.http);
+            if std::env::var_os("ANIMECIX_BENCH").is_some() {
+                eprintln!("[bench] api {key} -> {:.1?}ms", t0.elapsed());
+            }
+            match net_res {
                 Ok(fresh) => {
                     self.cache.lock().unwrap().insert(key.to_string(), (now, fresh.clone()));
                     self.disk_api_save(key, now, &fresh);
@@ -451,7 +457,11 @@ impl Client {
         }
 
         // 3) Ağ isteği
+        let t0 = std::time::Instant::now();
         let v = loader(&self.http)?;
+        if std::env::var_os("ANIMECIX_BENCH").is_some() {
+            eprintln!("[bench] api {key} -> {:.1?}ms", t0.elapsed());
+        }
         self.cache.lock().unwrap().insert(key.to_string(), (now, v.clone()));
         self.disk_api_save(key, now, &v);
         Ok(v)
@@ -523,32 +533,21 @@ impl Client {
 
     /// state.json'dan yüklenen (eski şemalı) başlıklar yeni alanlara (genres,
     /// runtime, episode_count, release_date) sahip olmayabilir. Bu yöntem, başlık
-    /// verisini API'den (önce bellek/disk önbelleği, sonra ağ) tazeleyerek zengin
-    /// metadata'yı doldurur. Zaten doluysa veya bulunamazsa olduğu gibi döner.
+    /// verisini yalnızca önbellekten (bellek/disk) tazeleyerek zengin metadata'yı
+    /// doldurur — ek ağ isteği YAPMAZ (hız regresyonu olmasın). Zaten doluysa veya
+    /// önbellekte bulunamazsa olduğu gibi döner.
     pub fn enrich_title(&self, t: &Title) -> Title {
         if t.genres.is_some() || t.runtime.is_some() || t.release_date.is_some() {
             return t.clone();
         }
-        // Önce ana sayfa listelerinde id eşleşmesi ara (önbellekli)
+        // Yalnızca ana sayfa listeleri önbelleğinde (bellek+disk, 3s) id eşleşmesi ara.
+        // Ağ çağrısı yok; ana sayfa zaten gezildiyse neredeyse anlık döner.
         if let Ok(cats) = self.home_lists() {
             for cat in &cats {
                 for it in &cat.items {
                     if it.id == t.id {
                         return it.clone();
                     }
-                }
-            }
-        }
-        // Bulunamazsa ada göre arama yap (genres/release_date burada güvenilir)
-        if let Ok(results) = self.search(&t.name) {
-            for r in &results {
-                if r.id == t.id {
-                    return r.clone();
-                }
-            }
-            if let Some(r) = results.first() {
-                if r.name == t.name {
-                    return r.clone();
                 }
             }
         }
@@ -1193,9 +1192,14 @@ impl Client {
         }
 
         // 3) Ağ isteği
+        let t0 = std::time::Instant::now();
         let out = self.http.get(url)
             .timeout(std::time::Duration::from_secs(12))
             .send().ok()?.bytes().ok().map(|b| b.to_vec());
+        if std::env::var_os("ANIMECIX_BENCH").is_some() {
+            let host = url.split('/').nth(2).unwrap_or(url);
+            eprintln!("[bench] img {} -> {:.1?}ms", host, t0.elapsed());
+        }
         if let Some(v) = &out {
             // Belleğe kaydet
             self.bytes.lock().unwrap().insert(url.to_string(), (now, v.clone()));

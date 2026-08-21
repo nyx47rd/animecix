@@ -1,6 +1,6 @@
 [package]
 name = "animecix"
-version = "1.5.2"
+version = "1.6.2"
 edition = "2021"
 
 [dependencies]
@@ -10,7 +10,7 @@ glib = "0.19"
 gdk-pixbuf = "0.19"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", features = ["blocking", "json", "stream"] }
+reqwest = { version = "0.12", features = ["blocking", "json", "stream", "http2", "brotli", "hickory-dns"] }
 futures = "0.3"
 tokio = { version = "1", features = ["rt", "net", "time"] }
 
