@@ -23,7 +23,7 @@ pub fn create_title_detail_header(
 
     // Başlık + Favori + Maraton butonu üst satırı
     let name_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    let name_lbl = gtk::Label::new(Some(&title.name));
+    let name_lbl = gtk::Label::new(Some(&title.display_name()));
     name_lbl.add_css_class("title-1");
     name_lbl.set_xalign(0.0);
     name_lbl.set_wrap(true);
@@ -34,22 +34,23 @@ pub fn create_title_detail_header(
     name_row.append(marathon_btn);
     info_box.append(&name_row);
 
-    // Yıl, Tür, Sezon sayısı rozet satırı
-    let meta_parts: Vec<String> = [
-        title.year.map(|y| y.to_string()),
-        title.title_type.as_deref().map(|t| match t {
-            "anime" => "Anime Serisi",
-            "movie" => "Film",
-            _ => "Dizi",
-        }.to_string()),
-        title.season_count.map(|s| format!("{s} Sezon")),
-    ].into_iter().flatten().collect();
+    // Tür satırı (API'den çevrilmiş): "Dram  •  Bilim Kurgu & Fantezi  •  Aksiyon & Macera"
+    if let Some(genre) = title.genre_line() {
+        let genre_lbl = gtk::Label::new(Some(&genre));
+        genre_lbl.add_css_class("dim-label");
+        genre_lbl.add_css_class("title-4");
+        genre_lbl.set_xalign(0.0);
+        genre_lbl.set_wrap(true);
+        info_box.append(&genre_lbl);
+    }
 
-    if !meta_parts.is_empty() {
-        let meta_lbl = gtk::Label::new(Some(&meta_parts.join("  •  ")));
+    // Süre / bölüm / yayın tarihi dikey meta bloğu
+    let detail_meta = title.detail_meta();
+    if !detail_meta.is_empty() {
+        let meta_lbl = gtk::Label::new(Some(&detail_meta));
         meta_lbl.add_css_class("dim-label");
-        meta_lbl.add_css_class("title-4");
         meta_lbl.set_xalign(0.0);
+        meta_lbl.set_wrap(true);
         info_box.append(&meta_lbl);
     }
 
@@ -168,7 +169,7 @@ pub fn create_movie_detail_view(
     info_box.set_valign(gtk::Align::Center);
 
     let name_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    let name_lbl = gtk::Label::new(Some(&title.name));
+    let name_lbl = gtk::Label::new(Some(&title.display_name()));
     name_lbl.add_css_class("title-1");
     name_lbl.set_xalign(0.0);
     name_lbl.set_wrap(true);
@@ -179,16 +180,23 @@ pub fn create_movie_detail_view(
     name_row.append(marathon_btn);
     info_box.append(&name_row);
 
-    let meta_parts: Vec<String> = [
-        title.year.map(|y| y.to_string()),
-        Some("Film 🎬".to_string()),
-    ].into_iter().flatten().collect();
+    if let Some(genre) = title.genre_line() {
+        let genre_lbl = gtk::Label::new(Some(&genre));
+        genre_lbl.add_css_class("dim-label");
+        genre_lbl.add_css_class("title-4");
+        genre_lbl.set_xalign(0.0);
+        genre_lbl.set_wrap(true);
+        info_box.append(&genre_lbl);
+    }
 
-    let meta_lbl = gtk::Label::new(Some(&meta_parts.join("  •  ")));
-    meta_lbl.add_css_class("dim-label");
-    meta_lbl.add_css_class("title-4");
-    meta_lbl.set_xalign(0.0);
-    info_box.append(&meta_lbl);
+    let detail_meta = title.detail_meta();
+    if !detail_meta.is_empty() {
+        let meta_lbl = gtk::Label::new(Some(&detail_meta));
+        meta_lbl.add_css_class("dim-label");
+        meta_lbl.set_xalign(0.0);
+        meta_lbl.set_wrap(true);
+        info_box.append(&meta_lbl);
+    }
 
     if let Some(desc) = &title.description {
         let clean_desc = desc.trim();

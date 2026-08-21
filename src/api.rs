@@ -62,9 +62,159 @@ pub struct Title {
     pub description: Option<String>,
     #[serde(default)]
     pub season_count: Option<i64>,
+    /// Genre display_name listesi (API'den "genres[].display_name")
+    #[serde(default)]
+    pub genres: Option<Vec<String>>,
+    /// Bölüm/dakika uzunluğu (API'den "runtime")
+    #[serde(default)]
+    pub runtime: Option<i64>,
+    /// Toplam bölüm sayısı (API'den "episode_count")
+    #[serde(default)]
+    pub episode_count: Option<i64>,
+    /// Yayın tarihi "YYYY-MM-DD" (API'den "release_date")
+    #[serde(default)]
+    pub release_date: Option<String>,
 }
 
 impl Title {
+    /// JSON değerinden Title üretir (id, ad, yıl, tür, poster, açıklama, sezon,
+    /// genres, runtime, episode_count ve release_date dahil).
+    pub fn from_value(r: &serde_json::Value) -> Option<Title> {
+        let id = r["id"].as_u64().or_else(|| r["title_id"].as_u64())?;
+        let tt = r["title_type"].as_str().unwrap_or("").to_string();
+        let genres = r["genres"].as_array().map(|arr| {
+            arr.iter()
+                .filter_map(|g| {
+                    if g.is_string() {
+                        g.as_str().map(|s| s.to_string())
+                    } else {
+                        g["display_name"]
+                            .as_str()
+                            .or_else(|| g["name"].as_str())
+                            .map(|s| s.to_string())
+                    }
+                })
+                .collect()
+        });
+        Some(Title {
+            id,
+            name: r["name"].as_str().unwrap_or("").to_string(),
+            year: r["year"].as_i64(),
+            title_type: if tt.is_empty() { None } else { Some(tt) },
+            poster: r["poster"].as_str().map(|s| s.to_string()),
+            description: r["description"].as_str().map(|s| s.to_string()),
+            season_count: r["season_count"].as_i64(),
+            genres,
+            runtime: r["runtime"].as_i64(),
+            episode_count: r["episode_count"].as_i64(),
+            release_date: r["release_date"].as_str().map(|s| s.to_string()),
+        })
+    }
+
+    /// Başlık satırı: "Ad (YIL)" veya yıl yoksa sadece ad.
+    pub fn display_name(&self) -> String {
+        match self.year {
+            Some(y) => format!("{} ({})", self.name, y),
+            None => self.name.clone(),
+        }
+    }
+
+    /// TMDB genre adını Türkçe'ye çevirir (bilinmeyen olduğu gibi döner).
+    fn tr_genre(s: &str) -> String {
+        let t = match s.trim().to_lowercase().as_str() {
+            "drama" => "Dram",
+            "animation" => "Animasyon",
+            "animasyon" => "Animasyon",
+            "comedy" => "Komedi",
+            "documentary" => "Belgesel",
+            "family" => "Aile",
+            "kids" => "Çocuk",
+            "news" => "Haber",
+            "reality" => "Gerçeklik",
+            "soap" => "Pembe Dizi",
+            "talk" => "Talk Show",
+            "war & politics" => "Savaş & Politika",
+            "western" => "Western",
+            "crime" => "Suç",
+            "mystery" => "Gizem",
+            "thriller" => "Gerilim",
+            "horror" => "Korku",
+            "romance" => "Romantik",
+            "music" => "Müzik",
+            "war" => "Savaş",
+            "fantasy" => "Fantezi",
+            "science fiction" => "Bilim Kurgu",
+            "sci-fi & fantasy" => "Bilim Kurgu & Fantezi",
+            "sci-fi" => "Bilim Kurgu",
+            "action & adventure" => "Aksiyon & Macera",
+            "action" => "Aksiyon",
+            "adventure" => "Macera",
+            _ => return s.to_string(),
+        };
+        t.to_string()
+    }
+
+    /// Çevrilmiş tür satırı: "Dram  •  Bilim Kurgu & Fantezi  •  Aksiyon & Macera".
+    /// "Animasyon" gereksiz olduğu için düşürülür.
+    pub fn genre_line(&self) -> Option<String> {
+        let gens = self.genres.as_ref()?;
+        let mut parts: Vec<String> = gens
+            .iter()
+            .map(|g| Self::tr_genre(g))
+            .filter(|g| g != "Animasyon")
+            .collect();
+        parts.dedup();
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join("  •  "))
+        }
+    }
+
+    /// "YYYY-MM-DD" -> "D/M/YYYY" (başına sıfır yok)
+    fn fmt_release_date(s: &str) -> Option<String> {
+        let p: Vec<&str> = s.split('-').collect();
+        if p.len() == 3 {
+            if let (Ok(y), Ok(m), Ok(d)) = (p[0].parse::<i64>(), p[1].parse::<i64>(), p[2].parse::<i64>()) {
+                return Some(format!("{}/{}/{}", d, m, y));
+            }
+        }
+        None
+    }
+
+    /// Detay başlık kartı için dikey meta bloğu:
+    /// "24 dakika\n•\n38 bölüm\n•\n29/9/2023"
+    pub fn detail_meta(&self) -> String {
+        let mut facts: Vec<String> = Vec::new();
+        if let Some(rt) = self.runtime {
+            if rt > 0 {
+                facts.push(format!("{} dakika", rt));
+            }
+        }
+        match self.episode_count {
+            Some(ec) if ec > 0 => facts.push(format!("{} bölüm", ec)),
+            _ if self.title_type.as_deref() == Some("movie") => facts.push("Film".to_string()),
+            _ => {}
+        }
+        if let Some(rd) = &self.release_date {
+            if let Some(d) = Self::fmt_release_date(rd) {
+                facts.push(d);
+            }
+        }
+        facts
+            .iter()
+            .enumerate()
+            .flat_map(|(i, f)| {
+                if i == 0 {
+                    vec![f.clone()]
+                } else {
+                    vec!["•".to_string(), f.clone()]
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// Kart alt satırı için birleşik meta: "YIL  •  TÜR  •  N Sezon".
     /// Hem maraton hem favoriler aynı formatı kullansın diye tek kaynak.
     pub fn meta_line(&self) -> String {
@@ -328,18 +478,10 @@ impl Client {
                         if t != "anime" && t != "movie" && m != "title" {
                             continue;
                         }
-                        if let Some(id) = it["id"].as_u64().or_else(|| it["title_id"].as_u64()) {
-                            items.push(Title {
-                                id,
-                                name: it["name"].as_str().unwrap_or("").to_string(),
-                                year: it["year"].as_i64(),
-                                title_type: Some(t.to_string()),
-                                poster: it["poster"]
-                                    .as_str()
-                                    .map(|s| s.to_string()),
-                                description: it["description"].as_str().map(|s| s.to_string()),
-                                season_count: it["season_count"].as_i64(),
-                            });
+                        if it["id"].as_u64().or_else(|| it["title_id"].as_u64()).is_some() {
+                            if let Some(t) = Title::from_value(it) {
+                                items.push(t);
+                            }
                         }
                     }
                 }
@@ -370,17 +512,8 @@ impl Client {
         let mut out = Vec::new();
         if let Some(results) = d["results"].as_array() {
             for r in results {
-                if let Some(id) = r["id"].as_u64() {
-                    let tt = r["title_type"].as_str().unwrap_or("");
-                    out.push(Title {
-                        id,
-                        name: r["name"].as_str().unwrap_or("").to_string(),
-                        year: r["year"].as_i64(),
-                        title_type: Some(tt.to_string()),
-                        poster: r["poster"].as_str().map(|s| s.to_string()),
-                        description: r["description"].as_str().map(|s| s.to_string()),
-                        season_count: r["season_count"].as_i64(),
-                    });
+                if let Some(t) = Title::from_value(r) {
+                    out.push(t);
                 }
             }
         }
@@ -1130,6 +1263,7 @@ impl Client {
                     poster,
                     description,
                     season_count,
+                    ..Default::default()
                 })
             }
             serde_json::Value::Number(n) => Some(Title {
@@ -1324,6 +1458,7 @@ impl Client {
                                     .and_then(|x| x.as_str())
                                     .map(|s| s.to_string()),
                                 season_count: it.get("season_count").and_then(|x| x.as_i64()),
+                                ..Default::default()
                             });
                             break;
                         }
@@ -1685,6 +1820,7 @@ mod tests {
             poster: None,
             description: None,
             season_count: seasons,
+            ..Default::default()
         }
     }
 
@@ -1692,6 +1828,32 @@ mod tests {
     fn meta_line_anime_with_seasons() {
         let t = sample("anime", Some(2021), Some(2));
         assert_eq!(t.meta_line(), "2021  •  Anime Serisi  •  2 Sezon");
+    }
+
+    #[test]
+    fn detail_meta_parses_real_shape() {
+        let v = serde_json::json!({
+            "id": 11130,
+            "name": "Sousou no Frieren",
+            "year": 2023,
+            "title_type": "anime",
+            "runtime": 24,
+            "episode_count": 38,
+            "release_date": "2023-09-29",
+            "genres": [
+                {"name": "drama", "display_name": "Dram"},
+                {"name": "animation", "display_name": "Animasyon"},
+                {"name": "sci-fi-fantasy", "display_name": "Sci-Fi & Fantasy"},
+                {"name": "action-adventure", "display_name": "Action & Adventure"}
+            ]
+        });
+        let t = Title::from_value(&v).unwrap();
+        assert_eq!(t.display_name(), "Sousou no Frieren (2023)");
+        assert_eq!(
+            t.genre_line(),
+            Some("Dram  •  Bilim Kurgu & Fantezi  •  Aksiyon & Macera".to_string())
+        );
+        assert_eq!(t.detail_meta(), "24 dakika\n•\n38 bölüm\n•\n29/9/2023");
     }
 
     #[test]
@@ -1726,6 +1888,7 @@ mod tests {
             poster: Some("http://x/p.png".into()),
             description: None,
             season_count: Some(3),
+            ..Default::default()
         };
         assert!(c.toggle_marathon(&t));
         let items = c.get_marathon();
@@ -1750,6 +1913,7 @@ mod tests {
                 poster: None,
                 description: None,
                 season_count: None,
+                ..Default::default()
             },
             completed: true,
             added_at: 123,
@@ -1807,6 +1971,7 @@ mod tests {
                 poster: None,
                 description: None,
                 season_count: None,
+                ..Default::default()
             },
             completed: false,
             added_at: 0,
