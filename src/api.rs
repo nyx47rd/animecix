@@ -351,12 +351,16 @@ impl Client {
         std::fs::create_dir_all(cache_dir.join("covers")).ok();
 
         // Şema sürümü değiştiyse eski API önbelleğini sıfırla (yeni Title alanları
-        // için: genres/runtime/episode_count/release_date).
-        let ver_path = cache_dir.join("api").join(".cache_version");
-        if std::fs::read_to_string(&ver_path).ok().as_deref() != Some(CACHE_VERSION) {
-            let _ = std::fs::remove_dir_all(cache_dir.join("api"));
-            let _ = std::fs::create_dir_all(cache_dir.join("api"));
-            let _ = std::fs::write(&ver_path, CACHE_VERSION);
+        // için: genres/runtime/episode_count/release_date). Test derlemesinde atlanır
+        // (testler diski yarıştırmasın; reset yalnızca gerçek sürüm atlamalarında gerekli).
+        #[cfg(not(test))]
+        {
+            let ver_path = cache_dir.join("api").join(".cache_version");
+            if std::fs::read_to_string(&ver_path).ok().as_deref() != Some(CACHE_VERSION) {
+                let _ = std::fs::remove_dir_all(cache_dir.join("api"));
+                let _ = std::fs::create_dir_all(cache_dir.join("api"));
+                let _ = std::fs::write(&ver_path, CACHE_VERSION);
+            }
         }
 
         Self {
@@ -1200,13 +1204,21 @@ impl Client {
             let host = url.split('/').nth(2).unwrap_or(url);
             eprintln!("[bench] img {} -> {:.1?}ms", host, t0.elapsed());
         }
-        if let Some(v) = &out {
-            // Belleğe kaydet
-            self.bytes.lock().unwrap().insert(url.to_string(), (now, v.clone()));
-            // Diske kaydet
-            let _ = std::fs::write(&disk_path, v);
-        }
         out
+    }
+
+    /// Uygulama açılışında çağrılır: ana sayfa sunucusu (animecix.tv) ve kapak sunucusu
+    /// (image.tmdb.org) için TLS/DNS/HTTP2 bağlantısını önceden kurar, böylece ilk gerçek
+    /// istek handshake maliyetini ödemez. Sonuçlar yok sayılır; çevrimdışıysa güvenle hata
+    /// verir ve ASLA panic etmez.
+    pub fn warmup(&self) {
+        let _ = self.http.get(BASE)
+            .header("Accept", "application/json")
+            .timeout(std::time::Duration::from_secs(5))
+            .send();
+        let _ = self.http.get("https://image.tmdb.org/t/p/w185/")
+            .timeout(std::time::Duration::from_secs(5))
+            .send();
     }
 
     // ---- durum ----
@@ -1850,6 +1862,10 @@ fn dirs_cache_or_home() -> PathBuf {
 mod tests {
     use super::*;
 
+    // state.json'a yazan marathon testleri paralel çalışınca birbirinin yazısını eziyor;
+    // onları serialize etmek için test-only kilit (üretim kodunu etkilemez).
+    static STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn sample(tt: &str, year: Option<i64>, seasons: Option<i64>) -> Title {
         Title {
             id: 1,
@@ -1861,6 +1877,30 @@ mod tests {
             season_count: seasons,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn warmup_is_safe_offline() {
+        // warmup çevrimdışı/hatalı ağda panic etmemeli (bağlantı ısıtma güvenli olmalı)
+        let c = Client::new();
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            c.warmup();
+        }));
+        assert!(r.is_ok(), "warmup panic etmemeli");
+    }
+
+    #[test]
+    fn cache_get_caches_and_reuses() {
+        // prefetch'in dayandığı önbellek sözleşmesi: ilk çağrı loader'ı çalıştırır,
+        // ikinci çağrı bellek önbelleğinden döner (loader tekrar ÇAĞRILMAZ).
+        let c = Client::new();
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let key = format!("test:cache_reuse:{}:{}", std::process::id(), n);
+        let v1 = c.cache_get(&key, 60, |_h| Ok(serde_json::json!({"n": n}))).unwrap();
+        // ikinci çağrıda loader panic ederse bu bir cache miss'tir (prefetch işe yaramadı demek)
+        let v2 = c.cache_get(&key, 60, |_h| panic!("loader tekrar çağrılmamalı (cache miss)")).unwrap();
+        assert_eq!(v1, v2);
     }
 
     #[test]
@@ -1935,6 +1975,7 @@ mod tests {
 
     #[test]
     fn marathon_persists_full_title_and_meta() {
+        let _g = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let c = Client::new();
         let before = c.get_marathon().len();
         let t = Title {
@@ -2004,6 +2045,7 @@ mod tests {
 
     #[test]
     fn marathon_hydrates_missing_name_from_disk_cache() {
+        let _g = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let c = Client::new();
         // Sahte "lists" disk önbelleği yaz (ağ gerektirmez, deterministik)
         let mut dir = dirs_cache_or_home();
