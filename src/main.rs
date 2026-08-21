@@ -134,6 +134,16 @@ fn main() {
                     transition: background-color 150ms ease;
                 }
 
+                /* === Detay görünümü bilgi rozetleri (süre / bölüm / yayın) === */
+                .detail-badge {
+                    background-color: alpha(currentColor, 0.08);
+                    border: 1px solid alpha(currentColor, 0.12);
+                    border-radius: 999px;
+                    padding: 3px 12px;
+                    color: alpha(currentColor, 0.75);
+                    font-size: 0.85em;
+                }
+
                 /* === Tek Seferlik İpucu Kartı === */
                 .tip-banner {
                     background-color: alpha(@accent_color, 0.1);

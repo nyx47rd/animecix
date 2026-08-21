@@ -1,6 +1,18 @@
 use gtk::prelude::*;
 use crate::api::Title;
 
+/// Detay kartı bilgi rozetlerini yatay sarılan bir kutuda döndürür.
+fn create_fact_badges(facts: &[String]) -> gtk::Box {
+    let box_ = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    box_.set_halign(gtk::Align::Start);
+    for f in facts {
+        let b = gtk::Label::new(Some(f));
+        b.add_css_class("detail-badge");
+        box_.append(&b);
+    }
+    box_
+}
+
 /// Detay başlık kartı: Poster, Başlık, Yıl, Açıklama, Sezon Bilgisi ve Favori Butonu
 pub fn create_title_detail_header(
     title: &Title,
@@ -44,14 +56,10 @@ pub fn create_title_detail_header(
         info_box.append(&genre_lbl);
     }
 
-    // Süre / bölüm / yayın tarihi dikey meta bloğu
-    let detail_meta = title.detail_meta();
-    if !detail_meta.is_empty() {
-        let meta_lbl = gtk::Label::new(Some(&detail_meta));
-        meta_lbl.add_css_class("dim-label");
-        meta_lbl.set_xalign(0.0);
-        meta_lbl.set_wrap(true);
-        info_box.append(&meta_lbl);
+    // Süre / bölüm / yayın tarihi rozet satırı
+    let facts = title.detail_facts();
+    if !facts.is_empty() {
+        info_box.append(&create_fact_badges(&facts));
     }
 
     // Açıklama paragrafı
@@ -189,13 +197,9 @@ pub fn create_movie_detail_view(
         info_box.append(&genre_lbl);
     }
 
-    let detail_meta = title.detail_meta();
-    if !detail_meta.is_empty() {
-        let meta_lbl = gtk::Label::new(Some(&detail_meta));
-        meta_lbl.add_css_class("dim-label");
-        meta_lbl.set_xalign(0.0);
-        meta_lbl.set_wrap(true);
-        info_box.append(&meta_lbl);
+    let facts = title.detail_facts();
+    if !facts.is_empty() {
+        info_box.append(&create_fact_badges(&facts));
     }
 
     if let Some(desc) = &title.description {
