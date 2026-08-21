@@ -1645,6 +1645,7 @@ impl App {
             let title_c = title.clone();
             let ep_c = ep.clone();
             let current_shared_c = current_shared.clone();
+            let toast_tx_w = toast_tx.clone();
             let (sender, receiver) = std::sync::mpsc::channel::<(f64, f64)>();
             std::thread::spawn(move || {
                 let mut current_ep = ep_c.episode;
@@ -1679,20 +1680,45 @@ impl App {
                                         season: current_season,
                                         name: format!("Bölüm {target_ep}"),
                                     };
-                                    if let Ok(next_url) = client_c.resolve(title_c.id, target_ep, current_season) {
-                                        current_ep = target_ep;
-                                        op_prompted = false;
-                                        ed_prompted = false;
-                                        let json_cmd = format!("{{\"command\":[\"loadfile\", \"{}\"]}}\n", next_url);
-                                        crate::player::send_mpv_cmd(&sock_c, &json_cmd);
-                                        let json_osd = format!("{{\"command\":[\"show-text\", \"▶️ Bölüm {} Açıldı\", 3000]}}\n", target_ep);
-                                        crate::player::send_mpv_cmd(&sock_c, &json_osd);
-                                        let w = api::Watched { title_id: title_c.id, episode: target_ep, season: current_season };
-                                        client_c.set_current(&w);
-                                        client_c.add_history(&title_c, &target);
-                                        *current_shared_c.lock().unwrap() = (target_ep, current_season);
-                                    } else {
-                                        crate::player::send_mpv_cmd(&sock_c, "{\"command\":[\"show-text\", \"⚠️ Sonraki Bölüm Bulunamadı\", 3000]}\n");
+                                    // Önce doğrudan çöz; başarısızsa tüm kaynakları dene
+                                    let next_url = client_c
+                                        .resolve(title_c.id, target_ep, current_season)
+                                        .or_else(|_| {
+                                            client_c
+                                                .resolve_all(title_c.id, target_ep, current_season)
+                                                .map(|v| v.into_iter().next().unwrap_or_default())
+                                        });
+                                    match next_url {
+                                        Ok(url) if !url.is_empty() => {
+                                            current_ep = target_ep;
+                                            op_prompted = false;
+                                            ed_prompted = false;
+                                            let load =
+                                                serde_json::json!({ "command": ["loadfile", url] });
+                                            crate::player::send_mpv_cmd(&sock_c, &format!("{}\n", load));
+                                            let osd = serde_json::json!({
+                                                "command": ["show-text", format!("▶️ Bölüm {} Açıldı", target_ep)],
+                                                "reply": false
+                                            });
+                                            crate::player::send_mpv_cmd(&sock_c, &format!("{}\n", osd));
+                                            let w = api::Watched {
+                                                title_id: title_c.id,
+                                                episode: target_ep,
+                                                season: current_season,
+                                            };
+                                            client_c.set_current(&w);
+                                            client_c.add_history(&title_c, &target);
+                                            *current_shared_c.lock().unwrap() = (target_ep, current_season);
+                                        }
+                                        _ => {
+                                            let msg = "Sonraki bölüm çözülemedi".to_string();
+                                            let osd = serde_json::json!({
+                                                "command": ["show-text", format!("⚠️ {msg}")],
+                                                "reply": false
+                                            });
+                                            crate::player::send_mpv_cmd(&sock_c, &format!("{}\n", osd));
+                                            let _ = toast_tx_w.send(msg);
+                                        }
                                     }
                                 }
                             }
@@ -1741,9 +1767,13 @@ impl App {
                 }
                 drop(rx);
                 let cur = *current_shared_t.lock().unwrap();
+                let (cur_ep, cur_season) = cur;
+                // İlerleme anahtarı her zaman GÜNCEL bölüme göre olmalı (başlangıç bölümüne
+                // sabitlenirse 'n' ile geçilen bölümün ilerlemesi öncekine kaydedilir).
+                let pk_cur = format!("{tid}:{cur_season}:{cur_ep}");
 
                 if disconnected {
-                    let last = progress2.borrow().get(&pk).copied();
+                    let last = progress2.borrow().get(&pk_cur).copied();
                     if let Some((pos, dur)) = last {
                         client_prog.save_progress(tid, cur.1, cur.0, pos, dur);
                     }
@@ -1752,8 +1782,8 @@ impl App {
 
                 if let Some((pos, dur)) = latest {
                     if pos < 1.0 { return glib::ControlFlow::Continue; }
-                    progress2.borrow_mut().insert(pk.clone(), (pos, dur));
-                    if let Some((pb, lbl)) = progress_bars2.borrow().get(&pk) {
+                    progress2.borrow_mut().insert(pk_cur.clone(), (pos, dur));
+                    if let Some((pb, lbl)) = progress_bars2.borrow().get(&pk_cur) {
                         if dur > 0.0 {
                             pb.set_fraction((pos / dur).clamp(0.0, 1.0));
                             let fmt = |s: f64| -> String {
@@ -1821,18 +1851,20 @@ impl App {
                     let start = std::time::Instant::now();
                     let mut playing = false;
                     loop {
-                        let sock_exists = std::path::Path::new(&sock_path_c).exists();
-                        if sock_exists {
-                            if let Some((_, dur)) = crate::player::query_mpv_position(&sock_path_c) {
-                                if dur > 0.0 { playing = true; break; }
-                            }
-                        }
+                        // Süreç çıktıysa kaynak bozuk kabul edilir, sıradakine geçilir.
                         match child.try_wait() {
                             Ok(Some(_)) => break,
                             Ok(None) => {}
                             Err(_) => break,
                         }
-                        if start.elapsed() > std::time::Duration::from_secs(20) { break; }
+                        // IPC soketi oluştuysa MPV dosyayı açtı demektir. Süre (duration) başta 0
+                        // olabilir; bu yüzden dur>0 şartı KOYMUYORUZ — aksi halde süreyi geç
+                        // bildiren geçerli kaynaklar "açılamadı" sayılıp öldürülüyordu.
+                        if std::path::Path::new(&sock_path_c).exists() {
+                            playing = true;
+                            break;
+                        }
+                        if start.elapsed() > std::time::Duration::from_secs(25) { break; }
                         std::thread::sleep(std::time::Duration::from_millis(250));
                     }
 
