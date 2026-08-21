@@ -521,6 +521,40 @@ impl Client {
         Ok(out)
     }
 
+    /// state.json'dan yüklenen (eski şemalı) başlıklar yeni alanlara (genres,
+    /// runtime, episode_count, release_date) sahip olmayabilir. Bu yöntem, başlık
+    /// verisini API'den (önce bellek/disk önbelleği, sonra ağ) tazeleyerek zengin
+    /// metadata'yı doldurur. Zaten doluysa veya bulunamazsa olduğu gibi döner.
+    pub fn enrich_title(&self, t: &Title) -> Title {
+        if t.genres.is_some() || t.runtime.is_some() || t.release_date.is_some() {
+            return t.clone();
+        }
+        // Önce ana sayfa listelerinde id eşleşmesi ara (önbellekli)
+        if let Ok(cats) = self.home_lists() {
+            for cat in &cats {
+                for it in &cat.items {
+                    if it.id == t.id {
+                        return it.clone();
+                    }
+                }
+            }
+        }
+        // Bulunamazsa ada göre arama yap (genres/release_date burada güvenilir)
+        if let Ok(results) = self.search(&t.name) {
+            for r in &results {
+                if r.id == t.id {
+                    return r.clone();
+                }
+            }
+            if let Some(r) = results.first() {
+                if r.name == t.name {
+                    return r.clone();
+                }
+            }
+        }
+        t.clone()
+    }
+
     pub fn episodes(&self, t: &Title) -> Result<Vec<Episode>, String> {
         if t.title_type.as_deref() == Some("movie") {
             return self.movie_episodes(t.id);
@@ -1862,6 +1896,17 @@ mod tests {
                 "Yayın: 29/9/2023".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn enrich_title_short_circuits_when_populated() {
+        let c = Client::new();
+        let mut t = sample("anime", Some(2021), Some(2));
+        // Zaten genre dolu -> ağ sorgusu yapmadan aynen dönmeli
+        t.genres = Some(vec!["Dram".to_string()]);
+        let e = c.enrich_title(&t);
+        assert_eq!(e.id, t.id);
+        assert_eq!(e.genres, Some(vec!["Dram".to_string()]));
     }
 
     #[test]
