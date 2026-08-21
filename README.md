@@ -24,6 +24,8 @@ kontrol eder ve kendini otomatik güncelleyebilir.
 - 📦 **Kurulum Sihirbazı**: bağımlılık kontrolü ve masaüstü menüsüne kurulum
 - 🔄 **Otomatik Güncelleme**: AppImage sürümünde başlatmada kendini günceller
 - 📡 En iyi kaliteyi otomatik seçer (paralel çözünürlük kontrolü)
+- ⚡ **Hızlı yükleme**: HTTP/2 multiplexing, bağlantı havuzu (keep-alive) ve DNS önbelleği;
+  kapak görselleri paralel (12 worker) indirilir
 
 ---
 
@@ -131,6 +133,26 @@ Tüm veriler (geçmiş, ayarlar, kapak önbelleği) şurada tutulur:
 ```
 
 *Ayarlardan* “Tüm Verileri Sıfırla ve Temizle” ile sıfırlanabilir.
+
+---
+
+## Performans
+
+Uygulama, ağ gecikmesini azaltmak için aşağıdaki teknikleri kullanır:
+
+- **HTTP/2 multiplexing**: Tek TCP/TLS bağlantısı üzerinden çoklu eşzamanlı akış; özellikle
+  ana sayfadaki onlarca kapak görselini sıraya sokmadan paralel getirir.
+- **Bağlantı havuzu & keep-alive**: Boşta bağlantılar 60sn boyunca sıcak tutulur
+  (`pool_idle_timeout`), böylece her istekte tekrar TLS/DNS el sıkışması yapılmaz.
+- **DNS önbelleği** (`hickory-dns`): Çözümlenen adresler saklanır, tekrarlı `getaddrinfo`
+  engellenir.
+- **Brotli sıkıştırma**: JSON yanıtları `br` ile sıkıştırılarak aktarılır.
+- **Paralel kapak indirme**: 12 worker ile kapaklar eşzamanlı çekilir (diskte 7 gün önbellekli).
+- **Stale-while-revalidate API önbelleği**: Süresi dolmuş veri anında gösterilir, arka planda
+  tazelenir; çevrimdışıyken bile eski veri kullanılır.
+
+> Geliştiriciler: `ANIMECIX_BENCH=1 ./target/release/animecix` ile her isteğin süresini
+> stderr'a loglayabilir (davranışı etkilemez).
 
 ---
 

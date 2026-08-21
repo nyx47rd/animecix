@@ -130,7 +130,7 @@ impl CoverManager {
     }
 
     fn pump_covers(&self) {
-        let max_workers = 4;
+        let max_workers = 12;
         let mut active = self.active.get();
 
         while active < max_workers {
