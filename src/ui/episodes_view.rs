@@ -13,6 +13,28 @@ fn create_fact_badges(facts: &[String]) -> gtk::Box {
     box_
 }
 
+/// Tüm liste kartlarında (ana sayfa, arama, favoriler, maraton, geçmiş) başlıktan
+/// sonra gelen ortak metadata satırı: çevrilmiş türler + "YIL • TÜR • N Sezon".
+/// Kartları tek bir çatı altında toplamak ve tutarlı kılmak için kullanılır.
+pub fn append_title_submeta(info_box: &gtk::Box, t: &Title) {
+    if let Some(g) = t.genre_line() {
+        let gl = gtk::Label::new(Some(&g));
+        gl.add_css_class("dim-label");
+        gl.set_xalign(0.0);
+        gl.set_wrap(false);
+        gl.set_single_line_mode(true);
+        gl.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        info_box.append(&gl);
+    }
+    let meta = gtk::Label::new(Some(&t.meta_line()));
+    meta.add_css_class("dim-label");
+    meta.set_xalign(0.0);
+    meta.set_wrap(false);
+    meta.set_single_line_mode(true);
+    meta.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    info_box.append(&meta);
+}
+
 /// Detay başlık kartı: Poster, Başlık, Yıl, Açıklama, Sezon Bilgisi ve Favori Butonu
 pub fn create_title_detail_header(
     title: &Title,
