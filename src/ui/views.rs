@@ -3,6 +3,7 @@ use adw::prelude::*;
 use std::rc::Rc;
 use std::cell::RefCell;
 use crate::api::{Client, HistoryEntry, Settings, Title};
+use crate::ui::episodes_view;
 
 /// İzleme Maratonu (To-Do List) Sayfası
 pub struct MarathonView;
@@ -183,10 +184,7 @@ impl MarathonView {
             title_row.append(&name_lbl);
             title_row.append(&status_badge);
             info_box.append(&title_row);
-            let sub_lbl = gtk::Label::new(Some(&item.title.meta_line()));
-            sub_lbl.add_css_class("dim-label");
-            sub_lbl.set_xalign(0.0);
-            info_box.append(&sub_lbl);
+            episodes_view::append_title_submeta(&info_box, &item.title);
 
             // İlerleme çubuğu
             let prog = gtk::ProgressBar::new();
@@ -360,6 +358,7 @@ impl HistoryView {
 
             text_box.append(&name);
             text_box.append(&sub);
+            episodes_view::append_title_submeta(&text_box, &h.title);
 
             let click_btn = gtk::Button::with_label("▶ İzle");
             click_btn.add_css_class("suggested-action");

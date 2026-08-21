@@ -713,6 +713,7 @@ impl App {
 
         box_.append(&pic);
         box_.append(&lbl);
+        episodes_view::append_title_submeta(&box_, t);
 
         let gesture = gtk::GestureClick::new();
         let this = self.clone_ref();
@@ -917,15 +918,8 @@ impl App {
             name.set_single_line_mode(true);
             name.set_ellipsize(gtk::pango::EllipsizeMode::End);
 
-            let sub = gtk::Label::new(Some(&t.meta_line()));
-            sub.add_css_class("dim-label");
-            sub.set_xalign(0.0);
-            sub.set_wrap(false);
-            sub.set_single_line_mode(true);
-            sub.set_ellipsize(gtk::pango::EllipsizeMode::End);
-
             info_box.append(&name);
-            info_box.append(&sub);
+            episodes_view::append_title_submeta(&info_box, &t);
 
             // Butonlar (maraton kartıyla aynı: İzle + Çıkar)
             let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
