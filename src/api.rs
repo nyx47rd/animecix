@@ -11,6 +11,9 @@ const TAU: &str = "https://tau-video.xyz";
 const API_TTL_SECS: u64 = 3 * 3600;
 /// Kapak görselleri için disk cache TTL (7 gün)
 const IMG_TTL_SECS: u64 = 7 * 24 * 3600;
+/// API disk cache şema sürümü. Title yapısı yeni alanlar (genres/runtime/...)
+/// kazandığında bu değer artırılır; böylece eski önbellek otomatik temizlenir.
+const CACHE_VERSION: &str = "2";
 
 pub struct Client {
     http: reqwest::blocking::Client,
@@ -345,6 +348,15 @@ impl Client {
         };
         std::fs::create_dir_all(cache_dir.join("api")).ok();
         std::fs::create_dir_all(cache_dir.join("covers")).ok();
+
+        // Şema sürümü değiştiyse eski API önbelleğini sıfırla (yeni Title alanları
+        // için: genres/runtime/episode_count/release_date).
+        let ver_path = cache_dir.join("api").join(".cache_version");
+        if std::fs::read_to_string(&ver_path).ok().as_deref() != Some(CACHE_VERSION) {
+            let _ = std::fs::remove_dir_all(cache_dir.join("api"));
+            let _ = std::fs::create_dir_all(cache_dir.join("api"));
+            let _ = std::fs::write(&ver_path, CACHE_VERSION);
+        }
 
         Self {
             http,
