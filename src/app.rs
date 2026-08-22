@@ -1549,6 +1549,30 @@ impl App {
     }
 
     /// Bölümü oynatır; en iyi kaliteli kaynaktan başlar, açılamazsa sıradaki kaynağa geçer.
+    /// mpv çıktığında supervisor'ın yeniden deneme kararı (saf fonksiyon, test edilebilir).
+    /// Döndürür: (yeniden_dene, _). Kararlar:
+    /// - exited=false                                   -> yeniden deneme yok (hâlâ çalışıyor)
+    /// - next_triggered=true (worker sonraki bölüme geçti) -> yeniden deneme YOK
+    /// - playing && !success (kaynak hatalı çıktı)       -> YENİDEN DENE (playing=false)
+    /// - playing && success (kullanıcı kapattı/bölüm bitti) -> yeniden deneme YOK
+    fn decide_retry(
+        exited: bool,
+        success: bool,
+        playing: bool,
+        next_triggered: bool,
+    ) -> (bool, bool) {
+        if !exited {
+            return (false, playing);
+        }
+        if next_triggered {
+            return (false, playing);
+        }
+        if playing && !success {
+            return (true, false);
+        }
+        (false, playing)
+    }
+
     fn play_candidates(&self, title: &Title, ep: &Episode, candidates: &[String]) {
         let w = api::Watched {
             title_id: title.id,
@@ -1640,6 +1664,11 @@ impl App {
         // bölümü kendi API'siyle çözüp yepyeni bir mpv ile açar (kırılgan loadfile
         // yaklaşımı yerine sağlam yöntem — ilk bölümün zaten çalışan akışı yeniden kullanılır).
         let mpv_child = std::sync::Arc::new(std::sync::Mutex::new(None::<std::process::Child>));
+        // Worker 'n'/'p' ile sonraki bölüme geçerken mevcut mpv'yi öldürür. Supervisor,
+        // mpv hata ile çıkınca "kaynak bozuk" deyip sonraki kaynağı denesin; AMA worker'ın
+        // öldürdüğü mpv'yi "kaynak hatası" sanıp mevcut bölümü yeniden açmasın diye bu bayrak
+        // kullanılır (true ise supervisor yeniden denemez, çünkü zaten sonraki bölüm tetiklendi).
+        let next_triggered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (next_tx, next_rx) = std::sync::mpsc::channel::<(Title, Episode)>();
         {
             let next_rx = std::sync::Arc::new(std::sync::Mutex::new(next_rx));
@@ -1709,6 +1738,7 @@ impl App {
             let toast_tx_w = toast_tx.clone();
             let mpv_child_c = mpv_child.clone();
             let next_tx_c = next_tx.clone();
+            let next_triggered_w = next_triggered.clone();
             let (sender, receiver) = std::sync::mpsc::channel::<(f64, f64)>();
             std::thread::spawn(move || {
                 let mut current_ep = ep_c.episode;
@@ -1748,8 +1778,9 @@ impl App {
                                     std::thread::sleep(std::time::Duration::from_millis(300));
                                     // Mevcut mpv'yi kapat
                                     if let Some(c) = mpv_child_c.lock().unwrap().as_mut() {
+                                        next_triggered_w.store(true, std::sync::atomic::Ordering::SeqCst);
                                         let _ = c.kill();
-                                        eprintln!("[NEXT] mpv kill gönderildi (ep->{})", target_ep);
+                                        eprintln!("[NEXT] mpv kill gönderildi (ep->{}", target_ep);
                                     } else {
                                         eprintln!("[NEXT] UYARI: mpv_child kilit içi boş, kill edilemedi");
                                     }
@@ -1862,6 +1893,7 @@ impl App {
             let auto_fullscreen_c = auto_fullscreen;
             let upscale_c = upscale;
             let mpv_child_c = mpv_child.clone();
+            let next_triggered_c = next_triggered.clone();
             let candidates: Vec<String> = candidates.to_vec();
             std::thread::spawn(move || {
                 'supervisor: for (i, url) in candidates.iter().enumerate() {
@@ -1909,18 +1941,32 @@ impl App {
                     let start = std::time::Instant::now();
                     let mut playing = false;
                     loop {
-                        // Süreç çıktıysa döngüden çık (kullanıcı kapattı, bölüm bitti ya da
-                        // worker sonraki bölüme geçmek için öldürdü). Kilit yalnızca try_wait
-                        // süresince KISA tutulur.
-                        let exited = {
+                        // Süreç çıktıysa döngüden çık. Çıkış kodunu da yakala: kullanıcı
+                        // kapatması başarılı (0), kaynak hatası başarısız (non-zero). Kilit
+                        // yalnızca try_wait süresince KISA tutulur.
+                        let (exited, success) = {
                             let mut g = mpv_child_c.lock().unwrap();
                             match g.as_mut().unwrap().try_wait() {
-                                Ok(Some(_)) => true,
-                                Ok(None) => false,
-                                Err(_) => true,
+                                Ok(Some(status)) => (true, status.success()),
+                                Ok(None) => (false, false),
+                                Err(_) => (true, false),
                             }
                         };
-                        if exited { break; }
+                        if exited {
+                            // Yeniden deneme kararı: kaynak hatalı çıkışı -> sonraki kaynağı dene;
+                            // worker'ın sonraki bölüme geçiş öldürmesi -> yeniden deneme (zaten geçildi).
+                            let retry = Self::decide_retry(
+                                true,
+                                success,
+                                playing,
+                                next_triggered_c.load(std::sync::atomic::Ordering::SeqCst),
+                            ).0;
+                            if retry {
+                                eprintln!("[SUP] kaynak hatalı çıktı, sonraki kaynağa geçiliyor (ep={}, kaynak={})", episode, i);
+                                playing = false;
+                            }
+                            break;
+                        }
                         // IPC soketi oluştuysa MPV dosyayı açtı demektir.
                         if std::path::Path::new(&sock_path_c).exists() {
                             if !playing {
@@ -1985,5 +2031,50 @@ impl App {
         let t = adw::Toast::new(&format!("Hata: {msg}"));
         t.set_timeout(4);
         self.toast.add_toast(t);
+    }
+}
+
+#[cfg(test)]
+mod next_episode_tests {
+    use super::App;
+
+    #[test]
+    fn decide_retry_source_error_retries() {
+        // Soket belirdi, mpv HATA ile çıktı, worker geçişi yok -> sonraki kaynağı dene
+        let (retry, playing) = App::decide_retry(true, false, true, false);
+        assert!(retry, "kaynak hatası yeniden denenmeli");
+        assert!(!playing);
+    }
+
+    #[test]
+    fn decide_retry_user_close_no_retry() {
+        // Kullanıcı kapattı (success=true) -> yeniden deneme yok
+        let (retry, playing) = App::decide_retry(true, true, true, false);
+        assert!(!retry);
+        assert!(playing);
+    }
+
+    #[test]
+    fn decide_retry_worker_next_no_retry() {
+        // Worker sonraki bölüme geçti (next_triggered) -> mevcut bölümü yeniden açma
+        let (retry, playing) = App::decide_retry(true, false, true, true);
+        assert!(!retry);
+        assert!(playing);
+    }
+
+    #[test]
+    fn decide_retry_not_exited_no_retry() {
+        let (retry, playing) = App::decide_retry(false, false, true, false);
+        assert!(!retry);
+        assert!(playing);
+    }
+
+    #[test]
+    fn decide_retry_never_opened_no_retry_flag() {
+        // Hiç açılmadı (playing=false): supervisor'ın else dalı zaten dener;
+        // decide_retry yalnızca playing=false döndürmeli.
+        let (retry, playing) = App::decide_retry(true, false, false, false);
+        assert!(!retry);
+        assert!(!playing);
     }
 }
