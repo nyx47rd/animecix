@@ -319,7 +319,7 @@ fn default_search_shortcut() -> String { "Ctrl+S".into() }
 fn default_true() -> bool { true }
 fn default_upscale() -> String { "sharp".into() }
 
-/// MPV upscale arg'larını döndürür. `shader_path` yalnızca "anime4k" modunda kullanılır;
+/// MPV upscale arg'larını döndürür. `shader_path` yalnızca "anime4k*" modlarında kullanılır;
 /// shader bulunamadıysa (`None`) boş döner (özellik zarifçe pas geçilir).
 pub(crate) fn upscale_mpv_args(upscale: &str, shader_path: Option<&str>) -> Vec<String> {
     match upscale {
@@ -327,7 +327,7 @@ pub(crate) fn upscale_mpv_args(upscale: &str, shader_path: Option<&str>) -> Vec<
             "--scale=ewa_lanczossharp".into(),
             "--cscale=ewa_lanczossharp".into(),
         ],
-        "anime4k" => match shader_path {
+        s if s.starts_with("anime4k") => match shader_path {
             Some(p) => vec![format!("--glsl-shaders={p}")],
             None => Vec::new(),
         },
@@ -1246,8 +1246,14 @@ impl Client {
     // ---- durum ----
 
     pub fn state_path() -> PathBuf {
-        let mut p = dirs_cache_or_home();
-        p.push(".local/share/animecix/state.json");
+        let mut p = if let Ok(d) = std::env::var("ANIMECIX_STATE_DIR") {
+            // Test izolasyonu: aynı makinede birden fazla test binary'si (probe, main)
+            // ayrı process'ler olarak aynı state.json'a yarışmasın diye env ile geçersiz kılınabilir.
+            PathBuf::from(d)
+        } else {
+            dirs_cache_or_home()
+        };
+        p.push("state.json");
         p
     }
 
@@ -1888,6 +1894,18 @@ mod tests {
     // onları serialize etmek için test-only kilit (üretim kodunu etkilemez).
     static STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    // Her test process'i (probe, main ayrı binary'ler) kendi state.json'ını kullanır,
+    // böylece aynı makinede paralel koşan ikili dosyalar birbirine çakışmaz.
+    fn use_isolated_state() {
+        use std::sync::Once;
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            let dir = std::env::temp_dir().join(format!("animecix-test-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&dir);
+            std::env::set_var("ANIMECIX_STATE_DIR", &dir);
+        });
+    }
+
     fn sample(tt: &str, year: Option<i64>, seasons: Option<i64>) -> Title {
         Title {
             id: 1,
@@ -1935,10 +1953,12 @@ mod tests {
         assert!(sharp.iter().any(|a| a == "--scale=ewa_lanczossharp"));
         assert!(sharp.iter().any(|a| a == "--cscale=ewa_lanczossharp"));
         assert!(!sharp.iter().any(|a| a.contains("dsharpen")));
-        // anime4k: shader yoksa arg yok (özellik pas geçilir)
-        assert!(super::upscale_mpv_args("anime4k", None).is_empty());
+        // anime4k modları: shader yoksa arg yok (özellik pas geçilir)
+        assert!(super::upscale_mpv_args("anime4k_light", None).is_empty());
+        assert!(super::upscale_mpv_args("anime4k_normal", None).is_empty());
+        assert!(super::upscale_mpv_args("anime4k_ultra", None).is_empty());
         // shader varsa glsl arg
-        let ak = super::upscale_mpv_args("anime4k", Some("/p/Anime4K.glsl"));
+        let ak = super::upscale_mpv_args("anime4k_ultra", Some("/p/Anime4K.glsl"));
         assert_eq!(ak, vec!["--glsl-shaders=/p/Anime4K.glsl".to_string()]);
     }
 
@@ -2014,6 +2034,7 @@ mod tests {
 
     #[test]
     fn marathon_persists_full_title_and_meta() {
+        use_isolated_state();
         let _g = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let c = Client::new();
         let before = c.get_marathon().len();
@@ -2084,6 +2105,7 @@ mod tests {
 
     #[test]
     fn marathon_hydrates_missing_name_from_disk_cache() {
+        use_isolated_state();
         let _g = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let c = Client::new();
         // Sahte "lists" disk önbelleği yaz (ağ gerektirmez, deterministik)
@@ -2132,6 +2154,8 @@ mod tests {
     fn next_episode_not_marked_watched_before_playing() {
         // Sonraki bölüme geçiş (set_current) izlenmeden "tamamlandı" işaretlememeli;
         // izlendi işareti yalnızca izlenme eşiği aşılınca konmalı.
+        use_isolated_state();
+        let _g = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let c = Client::new();
         let tid: u64 = 999_991;
         let w1 = Watched { title_id: tid, episode: 1, season: 0 };
