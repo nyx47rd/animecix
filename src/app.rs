@@ -1535,6 +1535,7 @@ impl App {
     fn play(&self, title: &Title, ep: &Episode) {
         let title = title.clone();
         let ep = ep.clone();
+        eprintln!("[PLAY] çağrıldı: {} S{:02}E{:02}", title.name, ep.season, ep.episode);
         let is_movie = title.title_type.as_deref() == Some("movie");
         self.busy(true);
         self.spawn(move |c| {
@@ -1556,6 +1557,10 @@ impl App {
         };
         self.client.set_current(&w);
         self.client.add_history(&title, &ep);
+        eprintln!(
+            "[PLAY-CAND] yeni mpv başlatılıyor: {} S{:02}E{:02} (kaynak sayısı={})",
+            title.name, ep.season, ep.episode, candidates.len()
+        );
 
         let media_title = format!("{} | S{:02}E{:02}", title.name, ep.season, ep.episode);
         let tid = title.id;
@@ -1649,6 +1654,7 @@ impl App {
                     }
                 };
                 if let Some((t, e)) = msg {
+                    eprintln!("[NEXT] GTK callback play çağırıyor (title={}, ep={}/{})", t.name, e.season, e.episode);
                     this.play(&t, &e);
                 }
                 if alive_next.load(std::sync::atomic::Ordering::Relaxed) {
@@ -1728,6 +1734,7 @@ impl App {
                                 let cmd = cmd_str.trim();
                                 let is_next = cmd == "next";
                                 let is_prev = cmd == "prev";
+                                eprintln!("[NEXT] cmd={:?} is_next={} is_prev={} current_ep={}", cmd, is_next, is_prev, current_ep);
                                 if (is_next || is_prev) && (is_next || current_ep > 1) {
                                     let target_ep = if is_next { current_ep + 1 } else { current_ep - 1 };
                                     current_ep = target_ep;
@@ -1742,13 +1749,19 @@ impl App {
                                     // Mevcut mpv'yi kapat
                                     if let Some(c) = mpv_child_c.lock().unwrap().as_mut() {
                                         let _ = c.kill();
+                                        eprintln!("[NEXT] mpv kill gönderildi (ep->{})", target_ep);
+                                    } else {
+                                        eprintln!("[NEXT] UYARI: mpv_child kilit içi boş, kill edilemedi");
                                     }
                                     // GTK ana iş parçacığına sonraki bölümü açtır (uygulama URL'yi çözer)
-                                    let _ = next_tx_c.send((title_c.clone(), Episode {
+                                    match next_tx_c.send((title_c.clone(), Episode {
                                         episode: target_ep,
                                         season: current_season,
                                         name: format!("Bölüm {target_ep}"),
-                                    }));
+                                    })) {
+                                        Ok(_) => eprintln!("[NEXT] GTK'ya play mesajı yollandı (ep={})", target_ep),
+                                        Err(e) => eprintln!("[NEXT] HATA: play mesajı yollanamadı: {}", e),
+                                    }
                                 }
                             }
                         }
