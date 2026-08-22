@@ -473,6 +473,22 @@ impl SettingsView {
         player_group.add(&aniskip_row);
         root.append(&player_group);
 
+        // Görüntü iyileştirme (upscale)
+        let img_group = adw::PreferencesGroup::new();
+        img_group.set_title("Görüntü İyileştirme");
+        let upscale_row = adw::ComboRow::new();
+        upscale_row.set_title("Görüntü İyileştirme");
+        upscale_row.set_subtitle("Düşük çözünürlüklü kaynakları yukarı ölçekler; yalnızca kaynak ekrandan küçükse etki eder (iGPU uyumlu 'hafif' mod)");
+        let upscale_model = gtk::StringList::new(&["Kapalı", "Keskinleştir", "Anime4K (hafif)"]);
+        upscale_row.set_model(Some(&upscale_model));
+        upscale_row.set_selected(match settings.upscale.as_str() {
+            "anime4k" => 2,
+            "sharp" => 1,
+            _ => 0,
+        });
+        img_group.add(&upscale_row);
+        root.append(&img_group);
+
         let update_group = adw::PreferencesGroup::new();
         update_group.set_title("Güncelleme");
 
@@ -530,6 +546,7 @@ impl SettingsView {
             let ani_r = aniskip_row.clone();
             let au_r = auto_update_row.clone();
             let notify_r = notify_row.clone();
+            let up_r = upscale_row.clone();
             let s = s_base.clone();
             let on_save = on_save.clone();
             Rc::new(move || {
@@ -551,6 +568,11 @@ impl SettingsView {
                 updated.aniskip_enabled = ani_r.is_active();
                 updated.auto_update = au_r.is_active();
                 updated.notify_uptodate = notify_r.is_active();
+                updated.upscale = match up_r.selected() {
+                    1 => "sharp".into(),
+                    2 => "anime4k".into(),
+                    _ => "off".into(),
+                };
                 on_save(updated);
             })
         };

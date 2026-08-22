@@ -61,6 +61,25 @@ pub struct App {
     pub home_acts: Rc<RefCell<Vec<Option<usize>>>>,
 }
 
+/// Çalışma anında Anime4K shader dosyasının yolunu bulur (AppImage'da APPDIR,
+/// geliştirme ortamında exe'nin yakınları). Bulunamazsa None -> özellik pas geçilir.
+fn resolve_upscale_shader() -> Option<String> {
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(ad) = std::env::var("APPDIR") {
+        if !ad.is_empty() {
+            candidates.push(std::path::Path::new(&ad).join("usr/share/animecix/assets/upscale/Anime4K_Upscale_DTD_x2.glsl"));
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            candidates.push(parent.join("usr/share/animecix/assets/upscale/Anime4K_Upscale_DTD_x2.glsl"));
+            candidates.push(parent.join("assets/upscale/Anime4K_Upscale_DTD_x2.glsl"));
+            candidates.push(parent.join("../../assets/upscale/Anime4K_Upscale_DTD_x2.glsl"));
+        }
+    }
+    candidates.into_iter().find(|p| p.exists()).map(|p| p.to_string_lossy().into_owned())
+}
+
 impl App {
     pub fn new(app: &adw::Application) -> Rc<Self> {
         let client = Arc::new(Client::new());
@@ -1552,6 +1571,7 @@ impl App {
         let _ = std::fs::remove_file(&sock_path);
 
         let auto_fullscreen = self.settings.borrow().auto_fullscreen;
+        let upscale = self.settings.borrow().upscale.clone();
         let aniskip = if self.settings.borrow().aniskip_enabled {
             self.client.fetch_aniskip_timestamps(&title.name, episode)
         } else {
@@ -1825,6 +1845,7 @@ impl App {
             let toast_tx_c = toast_tx.clone();
             let saved_pos_c = saved_pos;
             let auto_fullscreen_c = auto_fullscreen;
+            let upscale_c = upscale;
             let candidates: Vec<String> = candidates.to_vec();
             std::thread::spawn(move || {
                 for (i, url) in candidates.iter().enumerate() {
@@ -1849,6 +1870,7 @@ impl App {
                         .arg("--network-timeout=10")
                         .arg("--hwdec=auto-safe")
                         .arg("--ytdl-format=bestvideo[height<=1080]+bestaudio/best")
+                        .args(crate::api::upscale_mpv_args(&upscale_c, resolve_upscale_shader().as_deref()))
                         .arg(url);
                     let mut child = match cmd.spawn() {
                         Ok(c) => c,

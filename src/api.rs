@@ -308,12 +308,34 @@ pub struct Settings {
     /// Başlatmada güncel sürümdeyken "Güncel" bildirimini göster
     #[serde(default = "default_true")]
     pub notify_uptodate: bool,
+    /// Görüntü iyileştirme/upscale: "off" | "sharp" | "anime4k" (hafif DTD shader)
+    #[serde(default = "default_upscale")]
+    pub upscale: String,
 }
 fn default_loading() -> String { "overlay".into() }
 fn default_quick_search() -> bool { true }
 fn default_shortcut() -> String { "/".into() }
 fn default_search_shortcut() -> String { "Ctrl+S".into() }
 fn default_true() -> bool { true }
+fn default_upscale() -> String { "sharp".into() }
+
+/// MPV upscale arg'larını döndürür. `shader_path` yalnızca "anime4k" modunda kullanılır;
+/// shader bulunamadıysa (`None`) boş döner (özellik zarifçe pas geçilir).
+pub(crate) fn upscale_mpv_args(upscale: &str, shader_path: Option<&str>) -> Vec<String> {
+    match upscale {
+        "sharp" => vec![
+            "--scale=ewa_lanczossharp".into(),
+            "--cscale=ewa_lanczossharp".into(),
+            "--dsharpen=1".into(),
+        ],
+        "anime4k" => match shader_path {
+            Some(p) => vec![format!("--glsl-shaders={p}")],
+            None => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -325,6 +347,7 @@ impl Default for Settings {
             aniskip_enabled: default_true(),
             auto_update: default_true(),
             notify_uptodate: default_true(),
+            upscale: default_upscale(),
         }
     }
 }
@@ -1901,6 +1924,23 @@ mod tests {
         // ikinci çağrıda loader panic ederse bu bir cache miss'tir (prefetch işe yaramadı demek)
         let v2 = c.cache_get(&key, 60, |_h| panic!("loader tekrar çağrılmamalı (cache miss)")).unwrap();
         assert_eq!(v1, v2);
+    }
+
+    #[test]
+    fn upscale_mpv_args_modes() {
+        // off -> ek arg yok
+        assert!(super::upscale_mpv_args("off", None).is_empty());
+        assert!(super::upscale_mpv_args("kapali", None).is_empty());
+        // sharp -> ewa_lanczossharp + dsharpen
+        let sharp = super::upscale_mpv_args("sharp", None);
+        assert!(sharp.iter().any(|a| a == "--scale=ewa_lanczossharp"));
+        assert!(sharp.iter().any(|a| a == "--cscale=ewa_lanczossharp"));
+        assert!(sharp.iter().any(|a| a == "--dsharpen=1"));
+        // anime4k: shader yoksa arg yok (özellik pas geçilir)
+        assert!(super::upscale_mpv_args("anime4k", None).is_empty());
+        // shader varsa glsl arg
+        let ak = super::upscale_mpv_args("anime4k", Some("/p/Anime4K.glsl"));
+        assert_eq!(ak, vec!["--glsl-shaders=/p/Anime4K.glsl".to_string()]);
     }
 
     #[test]
