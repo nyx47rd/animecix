@@ -1631,6 +1631,34 @@ impl App {
         // işaretlemesi bunun üzerinden yapılır, böylece sonraki bölüm izlenmeden tamamlanmaz.
         let current_shared = std::sync::Arc::new(std::sync::Mutex::new((episode, season)));
 
+        // Sonraki/önceki bölüm geçişi: worker mevcut mpv'yi kapatır, uygulama yeni
+        // bölümü kendi API'siyle çözüp yepyeni bir mpv ile açar (kırılgan loadfile
+        // yaklaşımı yerine sağlam yöntem — ilk bölümün zaten çalışan akışı yeniden kullanılır).
+        let mpv_child = std::sync::Arc::new(std::sync::Mutex::new(None::<std::process::Child>));
+        let (next_tx, next_rx) = std::sync::mpsc::channel::<(Title, Episode)>();
+        {
+            let next_rx = std::sync::Arc::new(std::sync::Mutex::new(next_rx));
+            let this = self.clone_ref();
+            let alive_next = alive.clone();
+            glib::timeout_add_local(std::time::Duration::from_millis(150), move || {
+                let msg = {
+                    let rx = next_rx.lock().unwrap();
+                    match rx.try_recv() {
+                        Ok(m) => Some(m),
+                        Err(_) => None,
+                    }
+                };
+                if let Some((t, e)) = msg {
+                    this.play(&t, &e);
+                }
+                if alive_next.load(std::sync::atomic::Ordering::Relaxed) {
+                    glib::ControlFlow::Continue
+                } else {
+                    glib::ControlFlow::Break
+                }
+            });
+        }
+
         // Worker/supervisor iş parçacıklarından ana iş parçacığına toast bildirimi (GObject'lar Send değil)
         let (toast_tx, toast_rx) = std::sync::mpsc::channel::<String>();
         {
@@ -1673,6 +1701,8 @@ impl App {
             let ep_c = ep.clone();
             let current_shared_c = current_shared.clone();
             let toast_tx_w = toast_tx.clone();
+            let mpv_child_c = mpv_child.clone();
+            let next_tx_c = next_tx.clone();
             let (sender, receiver) = std::sync::mpsc::channel::<(f64, f64)>();
             std::thread::spawn(move || {
                 let mut current_ep = ep_c.episode;
@@ -1690,63 +1720,35 @@ impl App {
 
                 loop {
                     if std::path::Path::new(&sock_c).exists() {
-                        // MPV içi 'n' / 'p' kısayolu
+                        // MPV içi 'n' / 'p' kısayolu — loadfile YERİNE uygulama kendisi
+                        // sonraki/önceki bölümü çözüp yepyeni bir mpv ile açsın.
                         if std::path::Path::new(&cmd_c).exists() {
                             if let Ok(cmd_str) = std::fs::read_to_string(&cmd_c) {
                                 let _ = std::fs::remove_file(&cmd_c);
-                                let target_ep = if cmd_str.trim() == "next" {
-                                    current_ep + 1
-                                } else if current_ep > 1 {
-                                    current_ep - 1
-                                } else {
-                                    1
-                                };
-                                if target_ep != current_ep {
-                                    let target = Episode {
+                                let cmd = cmd_str.trim();
+                                let is_next = cmd == "next";
+                                let is_prev = cmd == "prev";
+                                if (is_next || is_prev) && (is_next || current_ep > 1) {
+                                    let target_ep = if is_next { current_ep + 1 } else { current_ep - 1 };
+                                    current_ep = target_ep;
+                                    op_prompted = false;
+                                    ed_prompted = false;
+                                    // Yükleniyor göstergesi (mpv üstünde OSD)
+                                    let _ = crate::player::send_mpv_cmd(
+                                        &sock_c,
+                                        "{\"command\":[\"show-text\",\"⏳ Sonraki Bölüm Yükleniyor...\",3000]}\n",
+                                    );
+                                    std::thread::sleep(std::time::Duration::from_millis(300));
+                                    // Mevcut mpv'yi kapat
+                                    if let Some(c) = mpv_child_c.lock().unwrap().as_mut() {
+                                        let _ = c.kill();
+                                    }
+                                    // GTK ana iş parçacığına sonraki bölümü açtır (uygulama URL'yi çözer)
+                                    let _ = next_tx_c.send((title_c.clone(), Episode {
                                         episode: target_ep,
                                         season: current_season,
                                         name: format!("Bölüm {target_ep}"),
-                                    };
-                                    // Önce doğrudan çöz; başarısızsa tüm kaynakları dene
-                                    let next_url = client_c
-                                        .resolve(title_c.id, target_ep, current_season)
-                                        .or_else(|_| {
-                                            client_c
-                                                .resolve_all(title_c.id, target_ep, current_season)
-                                                .map(|v| v.into_iter().next().unwrap_or_default())
-                                        });
-                                    match next_url {
-                                        Ok(url) if !url.is_empty() => {
-                                            current_ep = target_ep;
-                                            op_prompted = false;
-                                            ed_prompted = false;
-                                            let load =
-                                                serde_json::json!({ "command": ["loadfile", url] });
-                                            crate::player::send_mpv_cmd(&sock_c, &format!("{}\n", load));
-                                            let osd = serde_json::json!({
-                                                "command": ["show-text", format!("▶️ Bölüm {} Açıldı", target_ep)],
-                                                "reply": false
-                                            });
-                                            crate::player::send_mpv_cmd(&sock_c, &format!("{}\n", osd));
-                                            let w = api::Watched {
-                                                title_id: title_c.id,
-                                                episode: target_ep,
-                                                season: current_season,
-                                            };
-                                            client_c.set_current(&w);
-                                            client_c.add_history(&title_c, &target);
-                                            *current_shared_c.lock().unwrap() = (target_ep, current_season);
-                                        }
-                                        _ => {
-                                            let msg = "Sonraki bölüm çözülemedi".to_string();
-                                            let osd = serde_json::json!({
-                                                "command": ["show-text", format!("⚠️ {msg}")],
-                                                "reply": false
-                                            });
-                                            crate::player::send_mpv_cmd(&sock_c, &format!("{}\n", osd));
-                                            let _ = toast_tx_w.send(msg);
-                                        }
-                                    }
+                                    }));
                                 }
                             }
                         }
@@ -1846,6 +1848,7 @@ impl App {
             let saved_pos_c = saved_pos;
             let auto_fullscreen_c = auto_fullscreen;
             let upscale_c = upscale;
+            let mpv_child_c = mpv_child.clone();
             let candidates: Vec<String> = candidates.to_vec();
             std::thread::spawn(move || {
                 'supervisor: for (i, url) in candidates.iter().enumerate() {
@@ -1877,20 +1880,25 @@ impl App {
                             _ => None,
                         }.as_deref()))
                         .arg(url);
-                    let mut child = match cmd.spawn() {
+                    let child = match cmd.spawn() {
                         Ok(c) => c,
                         Err(e) => { eprintln!("mpv başlatılamadı: {e}"); continue; }
                     };
+                    *mpv_child_c.lock().unwrap() = Some(child);
 
                     let start = std::time::Instant::now();
                     let mut playing = false;
                     loop {
                         // Süreç çıktıysa kaynak bozuk kabul edilir, sıradakine geçilir.
-                        match child.try_wait() {
-                            Ok(Some(_)) => break,
-                            Ok(None) => {}
-                            Err(_) => break,
-                        }
+                        let exited = {
+                            let mut g = mpv_child_c.lock().unwrap();
+                            match g.as_mut().unwrap().try_wait() {
+                                Ok(Some(_)) => true,
+                                Ok(None) => false,
+                                Err(_) => true,
+                            }
+                        };
+                        if exited { break; }
                         // IPC soketi oluştuysa MPV dosyayı açtı demektir. Süre (duration) başta 0
                         // olabilir; bu yüzden dur>0 şartı KOYMUYORUZ — aksi halde süreyi geç
                         // bildiren geçerli kaynaklar "açılamadı" sayılıp öldürülüyordu.
@@ -1903,15 +1911,15 @@ impl App {
                     }
 
                     if playing {
-                        // Bölüm başarıyla açıldı; mpv kapandığında (kullanıcı kapattı ya da
-                        // bölüm bitti) başka bir kaynağı denemeyeceğiz — aksi halde aynı
-                        // bölümün farklı kaynağı yeni pencerede açılıp "mpv kapanıp yeniden
-                        // açılıyormuş" gibi görünür. Döngüden tamamen çık.
-                        let _ = child.wait();
+                        // Bölüm başarıyla açıldı; mpv kapandığında (kullanıcı kapattı, bölüm
+                        // bitti ya da sonraki bölüme geçildi) başka bir kaynağı denemeyeceğiz.
+                        if let Some(c) = mpv_child_c.lock().unwrap().as_mut() { let _ = c.wait(); }
                         break 'supervisor;
                     } else {
-                        let _ = child.kill();
-                        let _ = child.wait();
+                        if let Some(c) = mpv_child_c.lock().unwrap().as_mut() {
+                            let _ = c.kill();
+                            let _ = c.wait();
+                        }
                         if i + 1 < candidates.len() {
                             let _ = toast_tx_c.send("Kaynak açılamadı, diğer kaynağa geçiliyor…".to_string());
                             continue;
