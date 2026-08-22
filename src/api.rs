@@ -326,7 +326,6 @@ pub(crate) fn upscale_mpv_args(upscale: &str, shader_path: Option<&str>) -> Vec<
         "sharp" => vec![
             "--scale=ewa_lanczossharp".into(),
             "--cscale=ewa_lanczossharp".into(),
-            "--dsharpen=1".into(),
         ],
         "anime4k" => match shader_path {
             Some(p) => vec![format!("--glsl-shaders={p}")],
@@ -1931,11 +1930,11 @@ mod tests {
         // off -> ek arg yok
         assert!(super::upscale_mpv_args("off", None).is_empty());
         assert!(super::upscale_mpv_args("kapali", None).is_empty());
-        // sharp -> ewa_lanczossharp + dsharpen
+        // sharp -> ewa_lanczossharp (dsharpen bu mpv sürümünde yok, çıkarıldı)
         let sharp = super::upscale_mpv_args("sharp", None);
         assert!(sharp.iter().any(|a| a == "--scale=ewa_lanczossharp"));
         assert!(sharp.iter().any(|a| a == "--cscale=ewa_lanczossharp"));
-        assert!(sharp.iter().any(|a| a == "--dsharpen=1"));
+        assert!(!sharp.iter().any(|a| a.contains("dsharpen")));
         // anime4k: shader yoksa arg yok (özellik pas geçilir)
         assert!(super::upscale_mpv_args("anime4k", None).is_empty());
         // shader varsa glsl arg
