@@ -1893,10 +1893,12 @@ impl App {
                             _ => None,
                         }.as_deref()))
                         .arg(url);
+                    eprintln!("[SUP] mpv spawn deneniyor (ep={}, kaynak={}, url={:.80})", episode, i, url);
                     let child = match cmd.spawn() {
                         Ok(c) => c,
-                        Err(e) => { eprintln!("mpv başlatılamadı: {e}"); continue; }
+                        Err(e) => { eprintln!("[SUP] HATA mpv başlatılamadı (ep={}, kaynak={}): {}", episode, i, e); continue; }
                     };
+                    eprintln!("[SUP] mpv spawn edildi (ep={}, kaynak={})", episode, i);
                     *mpv_child_c.lock().unwrap() = Some(child);
 
                     // Bölüm başarıyla açıldıktan sonra supervisor, mpv kapatanacağını
@@ -1921,6 +1923,9 @@ impl App {
                         if exited { break; }
                         // IPC soketi oluştuysa MPV dosyayı açtı demektir.
                         if std::path::Path::new(&sock_path_c).exists() {
+                            if !playing {
+                                eprintln!("[SUP] socket belirdi, oynatma başladı (ep={}, kaynak={})", episode, i);
+                            }
                             playing = true;
                         }
                         // Yalnızca hiç açılmadıysa zaman aşımıyla başarısız say.
@@ -1929,6 +1934,8 @@ impl App {
                         }
                         std::thread::sleep(std::time::Duration::from_millis(250));
                     }
+
+                    eprintln!("[SUP] döngü bitti (ep={}, kaynak={}, playing={})", episode, i, playing);
 
                     if playing {
                         // Bölüm başarıyla açıldı; mpv kapandığında başka kaynağı denemiyoruz.
