@@ -478,7 +478,7 @@ impl SettingsView {
         img_group.set_title("Görüntü İyileştirme");
         let upscale_row = adw::ComboRow::new();
         upscale_row.set_title("Görüntü İyileştirme");
-        upscale_row.set_subtitle("Düşük çözünürlüklü kaynakları yukarı ölçekler; yalnızca kaynak ekrandan küçükse etki eder. Anime4K: hafif (DTD) / normal (klasik) / ultra (ağır CNN, GPU tüketir)");
+        upscale_row.set_subtitle("Düşük çözünürlüklü kaynağı yukarı ölçekler");
         let upscale_model = gtk::StringList::new(&[
             "Kapalı",
             "Keskinleştir",
@@ -495,6 +495,20 @@ impl SettingsView {
             _ => 0,
         });
         img_group.add(&upscale_row);
+
+        // libadwaita 0.6 subtitle etrafında sarılmaz (yalnızca üç nokta ile keser);
+        // uzun açıklamayı ayrı bir wrapping etiketle alt satıra geçiriyoruz.
+        let upscale_desc = gtk::Label::new(Some(
+            "Yalnızca kaynak çözünürlüğü ekrandan küçükse etki eder. Anime4K: hafif (DTD, iGPU dostu) / normal (klasik) / ultra (ağır CNN, GPU tüketir).",
+        ));
+        upscale_desc.set_wrap(true);
+        upscale_desc.set_xalign(0.0);
+        upscale_desc.set_margin_top(2);
+        upscale_desc.set_margin_bottom(8);
+        upscale_desc.set_margin_start(14);
+        upscale_desc.set_selectable(false);
+        upscale_desc.add_css_class("dim-label");
+        img_group.add(&upscale_desc);
         root.append(&img_group);
 
         let update_group = adw::PreferencesGroup::new();
@@ -601,6 +615,8 @@ impl SettingsView {
         auto_update_row.connect_active_notify(move |_| sa6());
         let sa7 = save_all.clone();
         notify_row.connect_active_notify(move |_| sa7());
+        let sa8 = save_all.clone();
+        upscale_row.connect_selected_notify(move |_| sa8());
 
         let data_group = adw::PreferencesGroup::new();
         data_group.set_title("Veri Yönetimi");
