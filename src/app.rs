@@ -1848,7 +1848,7 @@ impl App {
             let upscale_c = upscale;
             let candidates: Vec<String> = candidates.to_vec();
             std::thread::spawn(move || {
-                for (i, url) in candidates.iter().enumerate() {
+                'supervisor: for (i, url) in candidates.iter().enumerate() {
                     let _ = std::fs::remove_file(&cmd_file_c);
                     let _ = std::fs::remove_file(&sock_path_c);
                     let mut cmd = std::process::Command::new("mpv");
@@ -1903,8 +1903,12 @@ impl App {
                     }
 
                     if playing {
+                        // Bölüm başarıyla açıldı; mpv kapandığında (kullanıcı kapattı ya da
+                        // bölüm bitti) başka bir kaynağı denemeyeceğiz — aksi halde aynı
+                        // bölümün farklı kaynağı yeni pencerede açılıp "mpv kapanıp yeniden
+                        // açılıyormuş" gibi görünür. Döngüden tamamen çık.
                         let _ = child.wait();
-                        break;
+                        break 'supervisor;
                     } else {
                         let _ = child.kill();
                         let _ = child.wait();
