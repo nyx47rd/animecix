@@ -63,18 +63,18 @@ pub struct App {
 
 /// Çalışma anında Anime4K shader dosyasının yolunu bulur (AppImage'da APPDIR,
 /// geliştirme ortamında exe'nin yakınları). Bulunamazsa None -> özellik pas geçilir.
-fn resolve_upscale_shader() -> Option<String> {
+fn resolve_upscale_shader(name: &str) -> Option<String> {
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
     if let Ok(ad) = std::env::var("APPDIR") {
         if !ad.is_empty() {
-            candidates.push(std::path::Path::new(&ad).join("usr/share/animecix/assets/upscale/Anime4K_Upscale_DTD_x2.glsl"));
+            candidates.push(std::path::Path::new(&ad).join("usr/share/animecix/assets/upscale").join(name));
         }
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
-            candidates.push(parent.join("usr/share/animecix/assets/upscale/Anime4K_Upscale_DTD_x2.glsl"));
-            candidates.push(parent.join("assets/upscale/Anime4K_Upscale_DTD_x2.glsl"));
-            candidates.push(parent.join("../../assets/upscale/Anime4K_Upscale_DTD_x2.glsl"));
+            candidates.push(parent.join("usr/share/animecix/assets/upscale").join(name));
+            candidates.push(parent.join("assets/upscale").join(name));
+            candidates.push(parent.join("../../assets/upscale").join(name));
         }
     }
     candidates.into_iter().find(|p| p.exists()).map(|p| p.to_string_lossy().into_owned())
@@ -1870,7 +1870,12 @@ impl App {
                         .arg("--network-timeout=10")
                         .arg("--hwdec=auto-safe")
                         .arg("--ytdl-format=bestvideo[height<=1080]+bestaudio/best")
-                        .args(crate::api::upscale_mpv_args(&upscale_c, resolve_upscale_shader().as_deref()))
+                        .args(crate::api::upscale_mpv_args(&upscale_c, match upscale_c.as_str() {
+                            "anime4k_light" => resolve_upscale_shader("Anime4K_Upscale_DTD_x2.glsl"),
+                            "anime4k_normal" => resolve_upscale_shader("Anime4K_Upscale_Original_x2.glsl"),
+                            "anime4k_ultra" => resolve_upscale_shader("Anime4K_Upscale_CNN_x2_UL.glsl"),
+                            _ => None,
+                        }.as_deref()))
                         .arg(url);
                     let mut child = match cmd.spawn() {
                         Ok(c) => c,

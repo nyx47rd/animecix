@@ -478,11 +478,19 @@ impl SettingsView {
         img_group.set_title("Görüntü İyileştirme");
         let upscale_row = adw::ComboRow::new();
         upscale_row.set_title("Görüntü İyileştirme");
-        upscale_row.set_subtitle("Düşük çözünürlüklü kaynakları yukarı ölçekler; yalnızca kaynak ekrandan küçükse etki eder (iGPU uyumlu 'hafif' mod)");
-        let upscale_model = gtk::StringList::new(&["Kapalı", "Keskinleştir", "Anime4K (hafif)"]);
+        upscale_row.set_subtitle("Düşük çözünürlüklü kaynakları yukarı ölçekler; yalnızca kaynak ekrandan küçükse etki eder. Anime4K: hafif (DTD) / normal (klasik) / ultra (ağır CNN, GPU tüketir)");
+        let upscale_model = gtk::StringList::new(&[
+            "Kapalı",
+            "Keskinleştir",
+            "Anime4K (hafif)",
+            "Anime4K (normal)",
+            "Anime4K (ultra)",
+        ]);
         upscale_row.set_model(Some(&upscale_model));
         upscale_row.set_selected(match settings.upscale.as_str() {
-            "anime4k" => 2,
+            "anime4k_ultra" => 4,
+            "anime4k_normal" => 3,
+            "anime4k_light" | "anime4k" => 2,
             "sharp" => 1,
             _ => 0,
         });
@@ -570,7 +578,9 @@ impl SettingsView {
                 updated.notify_uptodate = notify_r.is_active();
                 updated.upscale = match up_r.selected() {
                     1 => "sharp".into(),
-                    2 => "anime4k".into(),
+                    2 => "anime4k_light".into(),
+                    3 => "anime4k_normal".into(),
+                    4 => "anime4k_ultra".into(),
                     _ => "off".into(),
                 };
                 on_save(updated);
