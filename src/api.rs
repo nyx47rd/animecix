@@ -559,21 +559,36 @@ impl Client {
 
     /// state.json'dan yüklenen (eski şemalı) başlıklar yeni alanlara (genres,
     /// runtime, episode_count, release_date) sahip olmayabilir. Bu yöntem, başlık
-    /// verisini yalnızca önbellekten (bellek/disk) tazeleyerek zengin metadata'yı
-    /// doldurur — ek ağ isteği YAPMAZ (hız regresyonu olmasın). Zaten doluysa veya
-    /// önbellekte bulunamazsa olduğu gibi döner.
+    /// verisini önce önbellekten (bellek+disk), bulunamazsa AĞ üzerinden tazeleyerek
+    /// zengin metadata'yı doldurur. Favoriler/geçmiş/maratondan gelen başlıkların da
+    /// detay kartında (yayın tarihi, bölüm sayısı, süre vb.) zorunlu olarak gözükmesi
+    /// için ağ fellback'i mevcuttur — bölümler zaten ağ'dan çekildiğinden ek gecikme
+    /// ihmal edilebilir. Zaten doluysa olduğu gibi döner.
     pub fn enrich_title(&self, t: &Title) -> Title {
         if t.genres.is_some() || t.runtime.is_some() || t.release_date.is_some() {
             return t.clone();
         }
-        // Yalnızca ana sayfa listeleri önbelleğinde (bellek+disk, 3s) id eşleşmesi ara.
-        // Ağ çağrısı yok; ana sayfa zaten gezildiyse neredeyse anlık döner.
+        // 1) Ana sayfa listeleri önbelleği (bellek+disk) — anlık.
         if let Ok(cats) = self.home_lists() {
             for cat in &cats {
                 for it in &cat.items {
                     if it.id == t.id {
                         return it.clone();
                     }
+                }
+            }
+        }
+        // 2) Ağ fellback: id ile ara (aramada detay kartı dolu geldiğinden emin).
+        if let Ok(results) = self.search(&t.id.to_string()) {
+            if let Some(src) = results.into_iter().find(|x| x.id == t.id) {
+                return src;
+            }
+        }
+        // 3) Son çare: isimle ara.
+        if !t.name.is_empty() {
+            if let Ok(results) = self.search(&t.name) {
+                if let Some(src) = results.into_iter().find(|x| x.id == t.id) {
+                    return src;
                 }
             }
         }
