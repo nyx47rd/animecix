@@ -1886,10 +1886,17 @@ impl App {
                     };
                     *mpv_child_c.lock().unwrap() = Some(child);
 
+                    // Bölüm başarıyla açıldıktan sonra supervisor, mpv kapatanacağını
+                    // KENDİSİ poller (try_wait); böylece worker aynı mutex'i kilitleyip
+                    // mpv'yi öldürebilir. ÖNEMLİ: kilidi blocking `wait()` ile TUTMUYORUZ,
+                    // aksi halde worker kill için kilidi alamaz ve deadlock olurdu (mpv
+                    // kapanmaz, sonraki bölüme geçilmezdi).
                     let start = std::time::Instant::now();
                     let mut playing = false;
                     loop {
-                        // Süreç çıktıysa kaynak bozuk kabul edilir, sıradakine geçilir.
+                        // Süreç çıktıysa döngüden çık (kullanıcı kapattı, bölüm bitti ya da
+                        // worker sonraki bölüme geçmek için öldürdü). Kilit yalnızca try_wait
+                        // süresince KISA tutulur.
                         let exited = {
                             let mut g = mpv_child_c.lock().unwrap();
                             match g.as_mut().unwrap().try_wait() {
@@ -1899,20 +1906,20 @@ impl App {
                             }
                         };
                         if exited { break; }
-                        // IPC soketi oluştuysa MPV dosyayı açtı demektir. Süre (duration) başta 0
-                        // olabilir; bu yüzden dur>0 şartı KOYMUYORUZ — aksi halde süreyi geç
-                        // bildiren geçerli kaynaklar "açılamadı" sayılıp öldürülüyordu.
+                        // IPC soketi oluştuysa MPV dosyayı açtı demektir.
                         if std::path::Path::new(&sock_path_c).exists() {
                             playing = true;
+                        }
+                        // Yalnızca hiç açılmadıysa zaman aşımıyla başarısız say.
+                        if start.elapsed() > std::time::Duration::from_secs(25) && !playing {
                             break;
                         }
-                        if start.elapsed() > std::time::Duration::from_secs(25) { break; }
                         std::thread::sleep(std::time::Duration::from_millis(250));
                     }
 
                     if playing {
-                        // Bölüm başarıyla açıldı; mpv kapandığında (kullanıcı kapattı, bölüm
-                        // bitti ya da sonraki bölüme geçildi) başka bir kaynağı denemeyeceğiz.
+                        // Bölüm başarıyla açıldı; mpv kapandığında başka kaynağı denemiyoruz.
+                        // Worker bu mpv'yi artık kilitlemeyeceğinden kilitli wait güvenli.
                         if let Some(c) = mpv_child_c.lock().unwrap().as_mut() { let _ = c.wait(); }
                         break 'supervisor;
                     } else {
