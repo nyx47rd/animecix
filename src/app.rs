@@ -1813,7 +1813,10 @@ impl App {
             let auto_fullscreen_c = auto_fullscreen;
             let upscale_c = upscale;
             let mpv_child_c = mpv_child.clone();
-            let candidates: Vec<String> = candidates.to_vec();
+            let mut candidates: Vec<String> = candidates.to_vec();
+            // Sibnet öncelikli: CDN WAF gerektirdiği için en güvenilir kaynaktır ve
+            // kullanıcı "önce sibnet denesin" istedi. Diğer sıralama korunur (stable sort).
+            candidates.sort_by_key(|u| !u.contains("sibnet"));
             std::thread::spawn(move || {
                 'supervisor: for (i, url) in candidates.iter().enumerate() {
                     let _ = std::fs::remove_file(&sock_path_c);
@@ -1911,6 +1914,25 @@ impl App {
                                 let _ = toast_tx_c.send(DISMISS_OPENING.to_string());
                             }
                             playing = true;
+                        }
+                        // "Açıldı" sayıldı ama kaynak bozuksa mpv soketi açar, sonra
+                        // hata verir / idle kalır / media yüklenmez. Bu durumda supervisor
+                        // playing=true sanıp BİR DAHA ASLA başka kaynağa geçmezdi (saatlerce
+                        // takılma). 15sn sonra hâlâ core-idle VE geçerli media yoksa (duration<=0)
+                        // kaynağı öldür, sıradaki kaynağa geç. (Yavaş tamponlayan ama geçerli
+                        // kaynak duration>0 olduğu için yanlışlıkla öldürülmez.)
+                        if playing {
+                            let idle = crate::player::query_mpv_prop(&sock_path_c, "core-idle").unwrap_or(0.0);
+                            let dur = crate::player::query_mpv_prop(&sock_path_c, "duration").unwrap_or(0.0);
+                            if idle >= 1.0 && dur <= 0.0 && start.elapsed() > std::time::Duration::from_secs(15) {
+                                eprintln!("[SUP] kaynak açıldı ama media yok (idle+duration=0), sonraki kaynağa geçiliyor (ep={}, kaynak={})", episode, i);
+                                let _ = toast_tx_c.send("Kaynak açıldı ama oynatamadı, diğer kaynağa geçiliyor…".to_string());
+                                if let Some(c) = mpv_child_c.lock().unwrap().as_mut() {
+                                    let _ = c.kill();
+                                }
+                                playing = false;
+                                break;
+                            }
                         }
                         // Yalnızca hiç açılmadıysa zaman aşımıyla başarısız say.
                         if start.elapsed() > std::time::Duration::from_secs(25) && !playing {

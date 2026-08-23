@@ -15,7 +15,10 @@ pub fn query_mpv_prop(sock: &str, prop: &str) -> Option<f64> {
     if v["error"].as_str() != Some("success") {
         return None;
     }
-    v["data"].as_f64()
+    match v["data"] {
+        serde_json::Value::Bool(b) => Some(if b { 1.0 } else { 0.0 }),
+        _ => v["data"].as_f64(),
+    }
 }
 
 /// Tek socket bağlantısı ile time-pos ve duration'ı birlikte sorgular.
