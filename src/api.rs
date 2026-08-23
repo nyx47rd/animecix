@@ -1224,14 +1224,30 @@ impl Client {
             return AniSkipTimes::default();
         };
 
-        let key = format!("aniskip_v3:{mal_id}:{ep_num}");
-        let d = match self.cache_get(&key, 7 * 86400, |http| {
-            http.get(format!("https://api.aniskip.com/v2/skip-times/{mal_id}/{ep_num}?types=op&types=ed&episodeLength=0"))
-                .timeout(std::time::Duration::from_secs(4))
-                .send()
-                .map_err(|e| e.to_string())?
-                .json()
-                .map_err(|e| e.to_string())
+        let key = format!("aniskip_v4:{mal_id}:{ep_num}");
+        let d = match self.cache_get(&key, 6 * 3600, |http| {
+            // AniSkip arada HTTP 500 döndürebiliyor (ör. NNB ep8). ESKİ HATA:
+            // 500 gövdesi geçerli JSON olduğu için başarı sayılıp 7 GÜN
+            // önbelleğe alınıyordu -> bölüm bir hafta "bulunamıyor" kalıyordu.
+            // Artık: status kontrolü (5xx -> Err -> ÖNBELLEĞE GİRMEZ) + geçici
+            // hatada tek seferlik yeniden deneme.
+            let fetch = |http: &reqwest::blocking::Client| -> Result<serde_json::Value, String> {
+                http.get(format!("https://api.aniskip.com/v2/skip-times/{mal_id}/{ep_num}?types=op&types=ed&episodeLength=0"))
+                    .timeout(std::time::Duration::from_secs(4))
+                    .send()
+                    .map_err(|e| e.to_string())?
+                    .error_for_status()
+                    .map_err(|e| e.to_string())?
+                    .json()
+                    .map_err(|e| e.to_string())
+            };
+            match fetch(http) {
+                Ok(v) => Ok(v),
+                Err(first) => {
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                    fetch(http).map_err(|_| first)
+                }
+            }
         }) {
             Ok(val) => val,
             Err(_) => return AniSkipTimes::default(),
@@ -2291,5 +2307,20 @@ mod tests {
             urls.iter().any(|u| u.contains("video.sibnet.ru/v/") && u.ends_with(".mp4")),
             "ep7 sibnet mp4'ü çözümlenmiş olmalı; gelen: {urls:?}"
         );
+    }
+
+    #[test]
+    fn aniskip_live_finds_non_non_biyori_ep9() {
+        // KULLANICI RAPORU (v2.7.10): AniSkip "artık bulamıyor". API tarafında
+        // veri VAR (op 140.6-228.5); hata 500 gövdelerinin 7 gün
+        // önbelleklenmesiydi. Bu canlı test zincirin tamamını doğrular:
+        // isim -> MAL ID -> skip-times.
+        let c = Client::new();
+        let t = c.fetch_aniskip_timestamps("Non Non Biyori", 9);
+        eprintln!("[live] NNB E9 aniskip: {t:?}");
+        assert!(t.op_end.is_some(), "ep9 intro (op) zamanları bulunmalı; gelen: {t:?}");
+        assert!(t.ed_start.is_some(), "ep9 outro (ed) zamanları bulunmalı; gelen: {t:?}");
+        // Makul aralık kontrolü: op videonun ilk 6 dakikası içinde bitmeli
+        assert!(t.op_end.unwrap() < 360.0, "op_end makul olmalı");
     }
 }
