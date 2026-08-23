@@ -23,7 +23,11 @@ kontrol eder ve kendini otomatik güncelleyebilir.
 - ⚙️ **Ayarlar**: masaüstü başlatıcı entegrasyonu, veri sıfırlama, kısayollar
 - 📦 **Kurulum Sihirbazı**: bağımlılık kontrolü ve masaüstü menüsüne kurulum
 - 🔄 **Otomatik Güncelleme**: AppImage sürümünde başlatmada kendini günceller
-- 📡 En iyi kaliteyi otomatik seçer (paralel çözünürlük kontrolü)
+- 🎯 **Akıllı kaynak seçimi**: tüm kaynaklar paralel çözülür, en kalitelisi (dosya boyutuna göre) seçilir;
+  ölü/pasif kaynaklar elenir, açılmayan kaynağa denk gelirse sonraki kaynağa kendiliğinden geçer
+- 🛡️ **VPN proxy desteği** (isteğe bağlı): yerelde çalışan bir proxy varsa
+  (`127.0.0.1:10808`, ör. sing-box + ProtonVPN WireGuard) video trafiğini oradan çıkarır ve
+  ISS kısıtlamalarını aşar; proxy kapalıysa uygulama normal çalışır, hiçbir şey bozulmaz
 - ⚡ **Hızlı yükleme**: HTTP/2 multiplexing, bağlantı havuzu (keep-alive) ve DNS önbelleği;
   kapak görselleri paralel (12 worker) indirilir
 
@@ -93,6 +97,21 @@ Kaynaktan derlenen sürümde otomatik güncelleme devre dışıdır (sadece AppI
 
 ---
 
+## İsteğe bağlı: Daha hızlı video (VPN proxy)
+
+ISS'n video trafiğini kısıtlıyorsa yerelde bir proxy çalıştırman yeterli: uygulama
+`127.0.0.1:10808` portunu görünce mpv trafiğini otomatik oradan geçirir; proxy yoksa
+hiçbir şey değişmez.
+
+Örnek kurulum — [ProtonVPN](https://protonvpn.com) ücretsiz hesap + WireGuard config'i
+ile root'suz SOCKS/HTTP proxy ([sing-box](https://github.com/SagerNet/sing-box)):
+
+```bash
+sing-box run -c ~/vpn-config.json &   # 10808 portunda proxy ayakta
+```
+
+---
+
 ## Geliştiriciler için derleme & yayın
 
 AppImage üretmek ve GitHub Release oluşturmak için:
@@ -117,6 +136,7 @@ bash build_appimage.sh
 | `/` | Bölüm ekranında hızlı bölüm arama |
 | `Ctrl+S` | Ana ekranda arama çubuğunu aç |
 | `s` | Oynatıcıda AniSkip ile intro sonuna atla |
+| `e` | Oynatıcıda AniSkip ile outro sonuna atla |
 | `Esc` | Geri / aramayı kapat |
 
 Kısayollar *Ayarlar* ekranından değiştirilebilir.
