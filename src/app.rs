@@ -1856,6 +1856,16 @@ impl App {
             // Tamamen kaliteye göre sıralı: resolve_all boyuta (kalite) göre dizer;
             // sibnet CDN WAF'ı boyutu ölçmemizi engellediğinden doğal olarak sona düşer.
             // (Kullanıcı sibnet'in başta olmasını istemedi.)
+            // Yerel VPN proxy'si (sing-box/Proton, port 10808) ayaktaysa video trafiğini
+            // oradan çıkar — ISS kısıtlamasını aşar. Kapalıysa uygulama normal devam
+            // eder (kırılmaz yapı: proxy yoksa bayrak eklenmez).
+            let use_proxy = std::net::TcpStream::connect_timeout(
+                &"127.0.0.1:10808".parse().expect("statik adres"),
+                std::time::Duration::from_millis(300),
+            ).is_ok();
+            if use_proxy {
+                eprintln!("[SUP] yerel proxy aktif (127.0.0.1:10808), mpv oradan çıkacak");
+            }
             std::thread::spawn(move || {
                 'supervisor: for (i, url) in candidates.iter().enumerate() {
                     let _ = std::fs::remove_file(&sock_path_c);
@@ -1905,6 +1915,12 @@ impl App {
                             "--http-header-fields=Referer: {}\nAccept: */*",
                             referer
                         ));
+                    }
+                    if use_proxy {
+                        // sing-box mixed inbound HTTP proxy modu (aynı port 10808).
+                        // mpv tüm http/https akışını CONNECT ile tünelden geçirir;
+                        // sibnet Referer başlıkları iç istekte aynen korunur.
+                        cmd.arg("--http-proxy=http://127.0.0.1:10808");
                     }
                     eprintln!("[SUP] mpv spawn deneniyor (ep={}, kaynak={}, url={:.80})", episode, i, url);
                     let child = match cmd.spawn() {
