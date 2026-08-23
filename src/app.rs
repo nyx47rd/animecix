@@ -1629,7 +1629,8 @@ impl App {
         let input_conf_content = format!(
             "{skip_cmd}\
              {outro_cmd}\
-             S seek -30; show-text \"⏪ 30s Geri\" 2000\n"
+             S seek -30; show-text \"⏪ 30s Geri\" 2000\n\
+             End ignore\n"
         );
         let _ = std::fs::write(&input_conf_path, input_conf_content);
 
