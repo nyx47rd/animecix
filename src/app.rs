@@ -1818,7 +1818,7 @@ impl App {
                 'supervisor: for (i, url) in candidates.iter().enumerate() {
                     let _ = std::fs::remove_file(&sock_path_c);
                     let mut cmd = std::process::Command::new("mpv");
-                    cmd.arg("--user-agent=mozilla")
+                    cmd.arg("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                         .arg(format!("--force-media-title={media_title_c}"))
                         .arg("--keep-open=yes")
                         .arg(format!("--input-ipc-server={sock_path_c}"));
@@ -1843,8 +1843,26 @@ impl App {
                             _ => None,
                         }.as_deref()))
                         .arg(url);
-                    if url.contains("sibnet") {
-                        cmd.arg("--http-header-fields=Referer: https://video.sibnet.ru/");
+                    if url.contains("video.sibnet.ru/v/") {
+                        // Sibnet CDN'i WAF üzerinden korunuyor: mp4 isteği yalnızca
+                        // DOĞRU Referer (embed sayfası) + tarayıcı benzeri UA + Accept
+                        // ile 302 vererek imzalı CDN URL'ine yönleniyor. Yanlış/eksik
+                        // header 400 döndürür. Referer'ı mp4 yolundaki videoid'den türet.
+                        let vid = url
+                            .split("/v/")
+                            .nth(1)
+                            .and_then(|s| s.split('/').nth(1))
+                            .map(|s| s.trim_end_matches(".mp4"))
+                            .unwrap_or("");
+                        let referer = if vid.is_empty() {
+                            "https://video.sibnet.ru/".to_string()
+                        } else {
+                            format!("https://video.sibnet.ru/shell.php?videoid={}", vid)
+                        };
+                        cmd.arg(format!(
+                            "--http-header-fields=Referer: {}\nAccept: */*",
+                            referer
+                        ));
                     }
                     eprintln!("[SUP] mpv spawn deneniyor (ep={}, kaynak={}, url={:.80})", episode, i, url);
                     let child = match cmd.spawn() {
