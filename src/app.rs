@@ -1574,6 +1574,24 @@ impl App {
         (false, playing)
     }
 
+    /// Medya hiç yüklenmeden bu kadar sn idle kalırsa kaynak "ölü" sayılır.
+    const SOURCE_DEAD_SECS: u64 = 20;
+    /// mpv soketi hiç oluşmadıysa denemeden vazgeçme süresi (sn).
+    const SOCKET_TIMEOUT_SECS: u64 = 25;
+
+    /// Kaynak ölü mü? SADECE medya hiç yüklenmediğinde (media_loaded=false),
+    /// core idle'ken ve duration hâlâ 0 iken, eşik süre dolduğunda true.
+    /// Bir kez yüklendiyse (duration>0 görüldüyse) kaynak sağlamdır; EOF'taki
+    /// duraklama dahil asla bu kararla öldürülmez.
+    fn source_is_dead(elapsed_secs: u64, core_idle: bool, duration: f64, media_loaded: bool) -> bool {
+        !media_loaded && core_idle && duration <= 0.0 && elapsed_secs >= Self::SOURCE_DEAD_SECS
+    }
+
+    /// mpv soketi hiç belirmeden süre dolduysa true (kaynağı hiç açamadı).
+    fn socket_timeout_hit(elapsed_secs: u64, socket_seen: bool) -> bool {
+        !socket_seen && elapsed_secs >= Self::SOCKET_TIMEOUT_SECS
+    }
+
     fn play_candidates(&self, title: &Title, ep: &Episode, candidates: &[String]) {
         let w = api::Watched {
             title_id: title.id,
@@ -1850,14 +1868,14 @@ impl App {
                     cmd.arg(format!("--input-conf={input_conf_path_c}"));
                     cmd.args(saved_pos_c.map(|p| format!("--start={p:.1}")).as_slice())
                         .arg("--cache=yes")
-                        .arg("--demuxer-max-bytes=32MiB")
-                        .arg("--demuxer-max-back-bytes=8MiB")
-                        .arg("--demuxer-readahead-secs=8")
+                        .arg("--demuxer-max-bytes=128MiB")
+                        .arg("--demuxer-max-back-bytes=32MiB")
+                        .arg("--demuxer-readahead-secs=120")
                         .arg("--cache-pause=yes")
-                        .arg("--cache-pause-wait=2")
-                        .arg("--cache-secs=30")
+                        .arg("--cache-pause-wait=3")
+                        .arg("--cache-secs=120")
                         .arg("--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5")
-                        .arg("--network-timeout=8")
+                        .arg("--network-timeout=10")
                         .arg("--hwdec=auto-safe")
                         .arg("--ytdl-format=bestvideo[height<=1080]+bestaudio/best")
                         .args(crate::api::upscale_mpv_args(&upscale_c, match upscale_c.as_str() {
@@ -1903,6 +1921,7 @@ impl App {
                     // kapanmaz, sonraki bölüme geçilmezdi).
                     let start = std::time::Instant::now();
                     let mut playing = false;
+                    let mut media_loaded = false;
                     loop {
                         // Süreç çıktıysa döngüden çık. Çıkış kodunu da yakala: kullanıcı
                         // kapatması başarılı (0), kaynak hatası başarısız (non-zero). Kilit
@@ -1939,15 +1958,22 @@ impl App {
                         // "Açıldı" sayıldı ama kaynak bozuksa mpv soketi açar, sonra
                         // hata verir / idle kalır / media yüklenmez. Bu durumda supervisor
                         // playing=true sanıp BİR DAHA ASLA başka kaynağa geçmezdi (saatlerce
-                        // takılma). 8sn sonra hâlâ core-idle VE geçerli media yoksa (duration<=0)
-                        // kaynağı öldür, sıradaki kaynağa geç (daha hızlı kaynak testi).
-                        // (Yavaş tamponlayan ama geçerli kaynak duration>0 olduğu için
-                        // yanlışlıkla öldürülmez.)
+                        // takılma). KURAL (v2.7.9): medya HİÇ yüklenmediyse (duration hep 0)
+                        // ve core-idle ise SOURCE_DEAD_SECS (20sn) sonunda kaynağı öldür,
+                        // sıradakine geç. Sibnet'in WAF yönlendirme + CDN zinciri yavaş
+                        // olabildiği için eşik bilinçli cömert; bir kez duration>0 görüldüyse
+                        // kaynak SAĞLAMDIR ve bu yol ile asla öldürülmez (EOF'taki duraklama
+                        // dahil). v2.7.7'deki 8sn eşiği yavaş yüklenen kaynakları daha
+                        // açılmadan öldürüp TÜM bölümlerin açılamamasına yol açmıştı.
                         if playing {
                             let idle = crate::player::query_mpv_prop(&sock_path_c, "core-idle").unwrap_or(0.0);
                             let dur = crate::player::query_mpv_prop(&sock_path_c, "duration").unwrap_or(0.0);
-                            if idle >= 1.0 && dur <= 0.0 && start.elapsed() > std::time::Duration::from_secs(8) {
-                                eprintln!("[SUP] kaynak açıldı ama media yok (idle+duration=0), sonraki kaynağa geçiliyor (ep={}, kaynak={})", episode, i);
+                            if dur > 0.0 {
+                                media_loaded = true;
+                            }
+                            let elapsed_secs = start.elapsed().as_secs();
+                            if Self::source_is_dead(elapsed_secs, idle >= 1.0, dur, media_loaded) {
+                                eprintln!("[SUP] kaynak hiç yüklemedi (idle+duration=0, {}sn), sonraki kaynağa geçiliyor (ep={}, kaynak={})", elapsed_secs, episode, i);
                                 let _ = toast_tx_c.send("Kaynak açıldı ama oynatamadı, diğer kaynağa geçiliyor…".to_string());
                                 if let Some(c) = mpv_child_c.lock().unwrap().as_mut() {
                                     let _ = c.kill();
@@ -1957,7 +1983,7 @@ impl App {
                             }
                         }
                         // Yalnızca hiç açılmadıysa zaman aşımıyla başarısız say.
-                        if start.elapsed() > std::time::Duration::from_secs(15) && !playing {
+                        if Self::socket_timeout_hit(start.elapsed().as_secs(), playing) {
                             break;
                         }
                         std::thread::sleep(std::time::Duration::from_millis(250));
@@ -2050,5 +2076,44 @@ mod decide_retry_tests {
         let (retry, playing) = App::decide_retry(true, false, false);
         assert!(!retry);
         assert!(!playing);
+    }
+
+    // ---- v2.7.9: kaynak ölümlü / soket zaman aşımı kararları ----
+
+    #[test]
+    fn slow_source_within_window_is_not_killed() {
+        // REGRESYON (v2.7.7): sibnet WAF+CDN zinciri 8-20sn sürebilir;
+        // yavaş ama sağlam kaynak eşik dolmadan KESİNLİKLE öldürülmemeli.
+        assert!(!App::source_is_dead(5, true, 0.0, false), "5sn'de öldürülmemeli");
+        assert!(!App::source_is_dead(19, true, 0.0, false), "19sn'de hâlâ sabırlı olunmalı");
+    }
+
+    #[test]
+    fn never_loaded_idle_source_is_dead_after_threshold() {
+        assert!(App::source_is_dead(20, true, 0.0, false), "20sn+idle+dur=0 -> ölü");
+        assert!(App::source_is_dead(120, true, 0.0, false));
+    }
+
+    #[test]
+    fn loaded_source_is_never_killed_by_dead_check() {
+        // Bir kez duration>0 görüldüyse kaynak sağlamdır: EOF'taki duraklama
+        // (idle=1) bile öldürme tetiklememeli.
+        assert!(!App::source_is_dead(600, true, 1435.0, true));
+        assert!(!App::source_is_dead(600, true, 0.0, true), "yüklendiyse duration anlık 0 okunsa bile");
+    }
+
+    #[test]
+    fn playing_source_or_unknown_duration_not_dead() {
+        // Aktif çalıyor (idle değil) -> ölü değil
+        assert!(!App::source_is_dead(600, false, 0.0, false));
+        // duration bilgisi henüz pozitifse (yükleme sürüyor) -> ölü değil
+        assert!(!App::source_is_dead(600, true, 12.0, false));
+    }
+
+    #[test]
+    fn socket_timeout_only_when_socket_never_seen() {
+        assert!(App::socket_timeout_hit(26, false), "soket hiç gelmedi + 25sn doldu -> vazgeç");
+        assert!(!App::socket_timeout_hit(24, false), "henüz süre dolmadı");
+        assert!(!App::socket_timeout_hit(600, true), "soket varken zaman aşımı uygulanmaz");
     }
 }
