@@ -1153,30 +1153,69 @@ impl Client {
 
     /// Anime adından AniList GraphQL API ile MAL ID (MyAnimeList ID) çözer
     pub fn resolve_mal_id(&self, anime_name: &str) -> Option<u64> {
-        let clean_name = anime_name
-            .replace("(TV)", "")
-            .replace("Dublaj", "")
-            .replace("Altyazılı", "")
-            .replace("Sezon", "")
-            .trim()
-            .to_string();
+        // İsim temizleme: dublaj/altyazı etiketleri, parantez içleri, sezon
+        // belirteçleri ("2. Sezon", "Sezon 2", "Season II"), bölüm no ve saf
+        // sayılar atılır — Anilist aramasında ana seri adı kalmalı.
+        let mut base = anime_name
+            .replace("(TV)", " ")
+            .replace("Türkçe", " ")
+            .replace("Dublaj", " ")
+            .replace("Altyazılı", " ")
+            .replace("Çizgi Film", " ")
+            .replace("(TV)", " ");
+        if let Some(p) = base.find('(') {
+            if let Some(q) = base.find(')').and_then(|q| if q > p { Some(q) } else { None }) {
+                base.replace_range(p..=q, " ");
+            }
+        }
+        let tokens: Vec<&str> = base
+            .split_whitespace()
+            .filter(|t| {
+                let low = t.to_lowercase();
+                let stem = low.trim_end_matches('.');
+                !(low.contains("sezon")
+                    || low.contains("season")
+                    || low.contains("bölüm")
+                    || stem.chars().all(|c| c.is_ascii_digit())
+                    || matches!(stem, "i" | "ii" | "iii" | "iv" | "v" | "part"))
+            })
+            .collect();
+        let cleaned = tokens.join(" ");
 
-        let key = format!("mal_id:{clean_name}");
-        let d = self.cache_get(&key, 30 * 86400, |http| {
-            let body = serde_json::json!({
-                "query": "query ($s: String) { Media (search: $s, type: ANIME) { idMal } }",
-                "variables": { "s": clean_name }
-            });
-            http.post("https://graphql.anilist.co")
-                .json(&body)
-                .timeout(std::time::Duration::from_secs(4))
-                .send()
-                .map_err(|e| e.to_string())?
-                .json()
-                .map_err(|e| e.to_string())
-        }).ok()?;
+        let mut cands: Vec<String> = Vec::new();
+        if !cleaned.is_empty() {
+            cands.push(cleaned.clone());
+        }
+        // Fallback: tam ad bulunamazsa ilk iki kelimeyi dene ("Non Non Biyori
+        // Nonstop" gibi alt serilerde tam ad bazen tutmaz).
+        let words: Vec<&str> = cleaned.split_whitespace().collect();
+        if words.len() > 2 {
+            let short = words[..2].join(" ");
+            cands.push(short);
+        }
 
-        d["data"]["Media"]["idMal"].as_u64()
+        for cand in &cands {
+            let key = format!("mal_id:{cand}");
+            let cand_c = cand.clone();
+            if let Ok(d) = self.cache_get(&key, 30 * 86400, move |http| {
+                let body = serde_json::json!({
+                    "query": "query ($s: String) { Media (search: $s, type: ANIME) { idMal } }",
+                    "variables": { "s": cand_c }
+                });
+                http.post("https://graphql.anilist.co")
+                    .json(&body)
+                    .timeout(std::time::Duration::from_secs(4))
+                    .send()
+                    .map_err(|e| e.to_string())?
+                    .json()
+                    .map_err(|e| e.to_string())
+            }) {
+                if let Some(id) = d["data"]["Media"]["idMal"].as_u64() {
+                    return Some(id);
+                }
+            }
+        }
+        None
     }
 
     /// AniSkip API'den (MAL ID + Bölüm No) intro (OP) ve outro (ED) damgalarını dinamik çözer
@@ -1215,6 +1254,10 @@ impl Client {
                 }
             }
         }
+        eprintln!(
+            "[ANISKIP] '{}' E{} mal={} op={:?}-{:?} ed={:?}-{:?}",
+            anime_name, ep_num, mal_id, res.op_start, res.op_end, res.ed_start, res.ed_end
+        );
         res
     }
 
