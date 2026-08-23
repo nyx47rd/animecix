@@ -1018,11 +1018,16 @@ impl Client {
                 let http = self.http.clone();
                 scope.spawn(move || {
                     if let Ok(mp4) = self.resolve_embed(&u) {
-                        // HEAD request ile dosya boyutunu kontrol et (kalite sıralaması için)
-                        let size = http.head(&mp4).send()
-                            .ok()
-                            .and_then(|r| r.content_length())
-                            .unwrap_or(0);
+                        // Sibnet CDN'i WAF nedeniyle HEAD'e 403 verir; boyut zaten 0
+                        // sayılacak, bu yüzden gereksiz istek atlanır (kaynak testi hızlanır).
+                        let size = if mp4.contains("video.sibnet.ru") {
+                            0
+                        } else {
+                            http.head(&mp4).send()
+                                .ok()
+                                .and_then(|r| r.content_length())
+                                .unwrap_or(0)
+                        };
                         let _ = tx.send((size, mp4));
                     }
                 });

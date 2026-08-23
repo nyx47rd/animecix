@@ -58,6 +58,7 @@ pub struct App {
     pub progress_bars: Rc<RefCell<HashMap<String, (gtk::ProgressBar, gtk::Label)>>>,
     pub loading_toast: Rc<RefCell<Option<adw::Toast>>>,
     pub opening_toast: Rc<RefCell<Option<adw::Toast>>>,
+    pub opening_toast_shown_at: Rc<RefCell<Option<std::time::Instant>>>,
     pub loading_gen: Rc<Cell<u32>>,
     pub home_acts: Rc<RefCell<Vec<Option<usize>>>>,
 }
@@ -221,6 +222,7 @@ impl App {
             progress_bars: Rc::new(RefCell::new(HashMap::new())),
             loading_toast: Rc::new(RefCell::new(None)),
             opening_toast: Rc::new(RefCell::new(None)),
+            opening_toast_shown_at: Rc::new(RefCell::new(None)),
             loading_gen: Rc::new(Cell::new(0)),
             fav_btn,
             marathon_btn,
@@ -259,6 +261,7 @@ impl App {
             progress_bars: self.progress_bars.clone(),
             loading_toast: self.loading_toast.clone(),
             opening_toast: self.opening_toast.clone(),
+            opening_toast_shown_at: self.opening_toast_shown_at.clone(),
             loading_gen: self.loading_gen.clone(),
             fav_btn: self.fav_btn.clone(),
             marathon_btn: self.marathon_btn.clone(),
@@ -1648,6 +1651,7 @@ impl App {
         ));
         t.set_timeout(0);
         self.opening_toast.borrow_mut().replace(t.clone());
+        self.opening_toast_shown_at.borrow_mut().replace(std::time::Instant::now());
         self.toast.add_toast(t);
 
         let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -1665,6 +1669,7 @@ impl App {
             let alive_toast = alive.clone();
             let toast_h = toast.clone();
             let opening_toast_h = self.opening_toast.clone();
+            let opening_toast_shown_at_h = self.opening_toast_shown_at.clone();
             glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
                 let rx = toast_rx.lock().unwrap();
                 let mut msg: Option<String> = None;
@@ -1678,8 +1683,23 @@ impl App {
                 drop(rx);
                 if let Some(m) = msg {
                     if m == DISMISS_OPENING {
+                        // Bölüm açıldı; ama OSD (bölüm adı) en az 10 sn görünür
+                        // kalsın — mpv tam ekrana geçene kadar kullanıcı okuyabilsin.
                         if let Some(t) = opening_toast_h.borrow_mut().take() {
-                            t.dismiss();
+                            let elapsed = opening_toast_shown_at_h
+                                .borrow()
+                                .map(|i| i.elapsed())
+                                .unwrap_or_default();
+                            if elapsed < std::time::Duration::from_secs(10) {
+                                let remain = std::time::Duration::from_secs(10) - elapsed;
+                                let t2 = t.clone();
+                                glib::timeout_add_local(remain, move || {
+                                    t2.dismiss();
+                                    glib::ControlFlow::Break
+                                });
+                            } else {
+                                t.dismiss();
+                            }
                         }
                     } else {
                         let tt = adw::Toast::new(&m);
@@ -1814,9 +1834,9 @@ impl App {
             let upscale_c = upscale;
             let mpv_child_c = mpv_child.clone();
             let mut candidates: Vec<String> = candidates.to_vec();
-            // Sibnet öncelikli: CDN WAF gerektirdiği için en güvenilir kaynaktır ve
-            // kullanıcı "önce sibnet denesin" istedi. Diğer sıralama korunur (stable sort).
-            candidates.sort_by_key(|u| !u.contains("sibnet"));
+            // Tamamen kaliteye göre sıralı: resolve_all boyuta (kalite) göre dizer;
+            // sibnet CDN WAF'ı boyutu ölçmemizi engellediğinden doğal olarak sona düşer.
+            // (Kullanıcı sibnet'in başta olmasını istemedi.)
             std::thread::spawn(move || {
                 'supervisor: for (i, url) in candidates.iter().enumerate() {
                     let _ = std::fs::remove_file(&sock_path_c);
@@ -1829,14 +1849,14 @@ impl App {
                     cmd.arg(format!("--input-conf={input_conf_path_c}"));
                     cmd.args(saved_pos_c.map(|p| format!("--start={p:.1}")).as_slice())
                         .arg("--cache=yes")
-                        .arg("--demuxer-max-bytes=128MiB")
-                        .arg("--demuxer-max-back-bytes=32MiB")
-                        .arg("--demuxer-readahead-secs=120")
+                        .arg("--demuxer-max-bytes=32MiB")
+                        .arg("--demuxer-max-back-bytes=8MiB")
+                        .arg("--demuxer-readahead-secs=8")
                         .arg("--cache-pause=yes")
-                        .arg("--cache-pause-wait=3")
-                        .arg("--cache-secs=120")
+                        .arg("--cache-pause-wait=2")
+                        .arg("--cache-secs=30")
                         .arg("--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5")
-                        .arg("--network-timeout=10")
+                        .arg("--network-timeout=8")
                         .arg("--hwdec=auto-safe")
                         .arg("--ytdl-format=bestvideo[height<=1080]+bestaudio/best")
                         .args(crate::api::upscale_mpv_args(&upscale_c, match upscale_c.as_str() {
@@ -1918,13 +1938,14 @@ impl App {
                         // "Açıldı" sayıldı ama kaynak bozuksa mpv soketi açar, sonra
                         // hata verir / idle kalır / media yüklenmez. Bu durumda supervisor
                         // playing=true sanıp BİR DAHA ASLA başka kaynağa geçmezdi (saatlerce
-                        // takılma). 15sn sonra hâlâ core-idle VE geçerli media yoksa (duration<=0)
-                        // kaynağı öldür, sıradaki kaynağa geç. (Yavaş tamponlayan ama geçerli
-                        // kaynak duration>0 olduğu için yanlışlıkla öldürülmez.)
+                        // takılma). 8sn sonra hâlâ core-idle VE geçerli media yoksa (duration<=0)
+                        // kaynağı öldür, sıradaki kaynağa geç (daha hızlı kaynak testi).
+                        // (Yavaş tamponlayan ama geçerli kaynak duration>0 olduğu için
+                        // yanlışlıkla öldürülmez.)
                         if playing {
                             let idle = crate::player::query_mpv_prop(&sock_path_c, "core-idle").unwrap_or(0.0);
                             let dur = crate::player::query_mpv_prop(&sock_path_c, "duration").unwrap_or(0.0);
-                            if idle >= 1.0 && dur <= 0.0 && start.elapsed() > std::time::Duration::from_secs(15) {
+                            if idle >= 1.0 && dur <= 0.0 && start.elapsed() > std::time::Duration::from_secs(8) {
                                 eprintln!("[SUP] kaynak açıldı ama media yok (idle+duration=0), sonraki kaynağa geçiliyor (ep={}, kaynak={})", episode, i);
                                 let _ = toast_tx_c.send("Kaynak açıldı ama oynatamadı, diğer kaynağa geçiliyor…".to_string());
                                 if let Some(c) = mpv_child_c.lock().unwrap().as_mut() {
@@ -1935,7 +1956,7 @@ impl App {
                             }
                         }
                         // Yalnızca hiç açılmadıysa zaman aşımıyla başarısız say.
-                        if start.elapsed() > std::time::Duration::from_secs(25) && !playing {
+                        if start.elapsed() > std::time::Duration::from_secs(15) && !playing {
                             break;
                         }
                         std::thread::sleep(std::time::Duration::from_millis(250));
