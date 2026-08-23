@@ -2268,4 +2268,28 @@ mod tests {
         st.current = None;
         c.save_state(&st);
     }
+
+    #[test]
+    fn resolve_embed_drops_unknown_hosts() {
+        // v2.7.6 sözleşmesi: bilinmeyen hostlar (ok.ru, gdrive...) pasif/ölü
+        // sayılıp ELENMELİ; ham embed URL aday listesine girmemeli.
+        let c = Client::new();
+        assert!(c.resolve_embed("https://odnoklassniki.ru/videoembed/2099802475096").is_err(), "ok.ru elenmeli");
+        assert!(c.resolve_embed("https://drive.google.com/file/d/x/preview").is_err(), "gdrive elenmeli");
+    }
+
+    #[test]
+    fn resolve_all_live_returns_playable_sibnet() {
+        // UÇTAN UCA (canlı ağ): "bölümler hiç açılmıyor" regresyon koruması.
+        // Gerçek API -> gerçek sibnet çözümlemesi en az bir mp4 üretmeli.
+        let c = Client::new();
+        let urls = c.resolve_all(7354, 7, 1)
+            .expect("resolve_all başarısız oldu");
+        eprintln!("[live] çözülen kaynaklar: {urls:?}");
+        assert!(!urls.is_empty(), "en az bir kaynak çözülmeli");
+        assert!(
+            urls.iter().any(|u| u.contains("video.sibnet.ru/v/") && u.ends_with(".mp4")),
+            "ep7 sibnet mp4'ü çözümlenmiş olmalı; gelen: {urls:?}"
+        );
+    }
 }
