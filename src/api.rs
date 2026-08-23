@@ -804,15 +804,11 @@ impl Client {
         if url.contains("streamtape.com") {
             return self.streamtape_resolve(url);
         }
-        let host = url
-            .split("//")
-            .nth(1)
-            .unwrap_or(url)
-            .split('/')
-            .next()
-            .unwrap_or(url)
-            .to_string();
-        Err(format!("{host} kaynağı şu an çözülemiyor"))
+        // Bilinmeyen host: çözüp direkt mp4 veremiyoruz, ama mpv (yt-dlp/lua
+        // scriptleriyle) bu ham embed URL'yi oynatmayı deneyebilir. Bu yüzden
+        // Err yerine ham URL'yi aday olarak döndürüyoruz; retry zincirinde
+        // son çare olur. (ör. odnoklassniki/ok.ru, google drive, youtube…)
+        Ok(url.to_string())
     }
 
     /// Sibnet: shell.php sayfasından direkt mp4 çeker
@@ -984,9 +980,15 @@ impl Client {
         let mut candidates = Vec::new();
         for g in groups.iter() {
             let mut mirrors = g.3.clone();
-            mirrors.sort_by_key(|v| {
-                let is_tau = v["url"].as_str().unwrap_or("").contains("tau-video.xyz");
-                !is_tau
+            mirrors.sort_by(|a, b| {
+                let ta = a["url"].as_str().unwrap_or("").contains("tau-video.xyz");
+                let tb = b["url"].as_str().unwrap_or("").contains("tau-video.xyz");
+                // tau en sona; aynı statüde en çok oylanan önce
+                ta.cmp(&tb).then_with(|| {
+                    let va = a["positive_votes"].as_i64().unwrap_or(0);
+                    let vb = b["positive_votes"].as_i64().unwrap_or(0);
+                    vb.cmp(&va)
+                })
             });
             for v in mirrors {
                 let u = v["url"].as_str().unwrap_or("").to_string();
@@ -998,20 +1000,25 @@ impl Client {
             if candidates.len() >= 8 { break; }
         }
 
-        // Tüm adayları paralel çözümle, her birinin boyutunu kontrol et
-        let found: Vec<(u64, String)> = std::thread::scope(|scope| {
+        // Tüm adayları paralel çözümle. ÖNEMLİ: sonucu alma (rx) sırasına göre
+        // TOPLAMAK yerine, her adaya öncelik indeksini (API oy/puan sırası) tag'
+        // edip sonunda o sıraya geri sıralıyoruz — böylece en çok oylanan /
+        // en yüksek puanlı kaynak kesinlikle ilk denenir (boyut sıralaması
+        // önceliği ezip yanlış/bozuk kaynağı başa taşımaz).
+        let found: Vec<(usize, u64, String)> = std::thread::scope(|scope| {
             let (tx, rx) = std::sync::mpsc::channel();
-            for u in candidates {
+            for (idx, u) in candidates.iter().enumerate() {
                 let tx = tx.clone();
                 let http = self.http.clone();
+                let u = u.clone();
                 scope.spawn(move || {
                     if let Ok(mp4) = self.resolve_embed(&u) {
-                        // HEAD request ile dosya boyutunu kontrol et
+                        // HEAD request ile dosya boyutunu kontrol et (kalite sıralaması için)
                         let size = http.head(&mp4).send()
                             .ok()
                             .and_then(|r| r.content_length())
                             .unwrap_or(0);
-                        let _ = tx.send((size, mp4));
+                        let _ = tx.send((idx, size, mp4));
                     }
                 });
             }
@@ -1022,21 +1029,22 @@ impl Client {
         if found.is_empty() {
             Err("Bölüm videosu çözülemedi".to_string())
         } else {
-            Ok(found)
+            // Öncelik indeksine (idx) göre artan; aynı öncelikte boyut (kalite) azalan.
+            let mut ordered: Vec<(usize, u64, String)> = found;
+            ordered.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
+            Ok(ordered.into_iter().map(|(_, size, mp4)| (size, mp4)).collect())
         }
     }
 
-    /// Direct mp4 URL'si döner — tüm kaynakları paralel çözer, en yüksek kaliteliyi seçer
+    /// Direct mp4 URL'si döner — öncelik sırasındaki (en çok oy/panlı) ilk kaynağı seçer
     pub fn resolve(&self, title_id: u64, episode: u64, season: u64) -> Result<String, String> {
-        let mut found = self.resolve_ranked(title_id, episode, season)?;
-        found.sort_by(|a, b| b.0.cmp(&a.0));
+        let found = self.resolve_ranked(title_id, episode, season)?;
         found.into_iter().next().map(|(_, url)| url).ok_or_else(|| "Bölüm videosu çözülemedi".to_string())
     }
 
-    /// Tüm çözülmüş kaynakları kalite sırasıyla (en iyi önce) döner — fallback için
+    /// Tüm çözülmüş kaynakları öncelik sırasıyla (en iyi önce) döner — fallback için
     pub fn resolve_all(&self, title_id: u64, episode: u64, season: u64) -> Result<Vec<String>, String> {
-        let mut found = self.resolve_ranked(title_id, episode, season)?;
-        found.sort_by(|a, b| b.0.cmp(&a.0));
+        let found = self.resolve_ranked(title_id, episode, season)?;
         Ok(found.into_iter().map(|(_, url)| url).collect())
     }
 
@@ -1240,6 +1248,9 @@ impl Client {
         if std::env::var_os("ANIMECIX_BENCH").is_some() {
             let host = url.split('/').nth(2).unwrap_or(url);
             eprintln!("[bench] img {} -> {:.1?}ms", host, t0.elapsed());
+        }
+        if let Some(ref data) = out {
+            let _ = std::fs::write(&disk_path, data);
         }
         out
     }

@@ -6,20 +6,27 @@ cd "$SCRIPT_DIR"
 
 echo "==> AnimeciX AppImage Oluşturuluyor..."
 
-# 0. Sürüm numarasını otomatik 0.1 artır (Cargo.toml)
-#    Minor 9'dan taşarsa major artar: 0.9 -> 1.0, 1.9 -> 2.0 (python'sız, saf bash)
+# 0. Sürüm numarasını otomatik 0.0.1 artır (Cargo.toml)
+#    Patch 9'dan taşarsa minor artar, minor 9'dan taşarsa major artar.
 OLD_VER=$(grep -m1 '^version =' Cargo.toml | cut -d '"' -f2)
 MAJOR=$(echo "$OLD_VER" | cut -d. -f1)
 MINOR=$(echo "$OLD_VER" | cut -d. -f2)
 PATCH=$(echo "$OLD_VER" | cut -d. -f3)
-NEW_MINOR=$((MINOR + 1))
-if [ "$NEW_MINOR" -gt 9 ]; then
-    NEW_MAJOR=$((MAJOR + 1))
-    NEW_MINOR=0
+NEW_PATCH=$((PATCH + 1))
+if [ "$NEW_PATCH" -gt 9 ]; then
+    NEW_PATCH=0
+    NEW_MINOR=$((MINOR + 1))
+    if [ "$NEW_MINOR" -gt 9 ]; then
+        NEW_MINOR=0
+        NEW_MAJOR=$((MAJOR + 1))
+    else
+        NEW_MAJOR=$MAJOR
+    fi
 else
     NEW_MAJOR=$MAJOR
+    NEW_MINOR=$MINOR
 fi
-NEW_VER="${NEW_MAJOR}.${NEW_MINOR}.${PATCH}"
+NEW_VER="${NEW_MAJOR}.${NEW_MINOR}.${NEW_PATCH}"
 
 sed -i "0,/^version = .*/s//version = \"$NEW_VER\"/" Cargo.toml
 echo "==> Sürüm yükseltildi: v$OLD_VER -> v$NEW_VER"

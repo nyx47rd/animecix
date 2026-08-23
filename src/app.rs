@@ -57,6 +57,7 @@ pub struct App {
     pub progress: Rc<RefCell<HashMap<String, (f64, f64)>>>,
     pub progress_bars: Rc<RefCell<HashMap<String, (gtk::ProgressBar, gtk::Label)>>>,
     pub loading_toast: Rc<RefCell<Option<adw::Toast>>>,
+    pub opening_toast: Rc<RefCell<Option<adw::Toast>>>,
     pub loading_gen: Rc<Cell<u32>>,
     pub home_acts: Rc<RefCell<Vec<Option<usize>>>>,
 }
@@ -219,6 +220,7 @@ impl App {
             progress: Rc::new(RefCell::new(client.load_state().progress)),
             progress_bars: Rc::new(RefCell::new(HashMap::new())),
             loading_toast: Rc::new(RefCell::new(None)),
+            opening_toast: Rc::new(RefCell::new(None)),
             loading_gen: Rc::new(Cell::new(0)),
             fav_btn,
             marathon_btn,
@@ -256,6 +258,7 @@ impl App {
             progress: self.progress.clone(),
             progress_bars: self.progress_bars.clone(),
             loading_toast: self.loading_toast.clone(),
+            opening_toast: self.opening_toast.clone(),
             loading_gen: self.loading_gen.clone(),
             fav_btn: self.fav_btn.clone(),
             marathon_btn: self.marathon_btn.clone(),
@@ -1552,19 +1555,14 @@ impl App {
     /// mpv çıktığında supervisor'ın yeniden deneme kararı (saf fonksiyon, test edilebilir).
     /// Döndürür: (yeniden_dene, _). Kararlar:
     /// - exited=false                                   -> yeniden deneme yok (hâlâ çalışıyor)
-    /// - next_triggered=true (worker sonraki bölüme geçti) -> yeniden deneme YOK
     /// - playing && !success (kaynak hatalı çıktı)       -> YENİDEN DENE (playing=false)
     /// - playing && success (kullanıcı kapattı/bölüm bitti) -> yeniden deneme YOK
     fn decide_retry(
         exited: bool,
         success: bool,
         playing: bool,
-        next_triggered: bool,
     ) -> (bool, bool) {
         if !exited {
-            return (false, playing);
-        }
-        if next_triggered {
             return (false, playing);
         }
         if playing && !success {
@@ -1624,18 +1622,11 @@ impl App {
             "e show-text \"⚠️ Outro zamanı bulunamadı (AniSkip)\" 2500\n".to_string()
         };
 
-        let cmd_file = format!("/tmp/animecix-cmd-{tid}.cmd");
-        let _ = std::fs::remove_file(&cmd_file);
-
         let input_conf_path = format!("/tmp/animecix-input-{tid}.conf");
         let input_conf_content = format!(
             "{skip_cmd}\
              {outro_cmd}\
-             S seek -30; show-text \"⏪ 30s Geri\" 2000\n\
-             n run \"sh\" \"-c\" \"echo next > {cmd_file}\"; show-text \"⏳ Sonraki Bölüm Yükleniyor...\" 4000\n\
-             N run \"sh\" \"-c\" \"echo next > {cmd_file}\"; show-text \"⏳ Sonraki Bölüm Yükleniyor...\" 4000\n\
-             p run \"sh\" \"-c\" \"echo prev > {cmd_file}\"; show-text \"⏳ Önceki Bölüm Yükleniyor...\" 4000\n\
-             P run \"sh\" \"-c\" \"echo prev > {cmd_file}\"; show-text \"⏳ Önceki Bölüm Yükleniyor...\" 4000\n"
+             S seek -30; show-text \"⏪ 30s Geri\" 2000\n"
         );
         let _ = std::fs::write(&input_conf_path, input_conf_content);
 
@@ -1644,6 +1635,9 @@ impl App {
         let client = self.client.clone();
         let toast = self.toast.clone();
 
+        if let Some(old) = self.opening_toast.borrow_mut().take() {
+            old.dismiss();
+        }
         let t = adw::Toast::new(&format!(
             "▶ {media_title} açılıyor…{}",
             saved_pos.map(|p| {
@@ -1652,7 +1646,8 @@ impl App {
                 else { format!(" ({}:{:02}'den)", s/60, s%60) }
             }).unwrap_or_default()
         ));
-        t.set_timeout(3);
+        t.set_timeout(0);
+        self.opening_toast.borrow_mut().replace(t.clone());
         self.toast.add_toast(t);
 
         let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -1660,46 +1655,16 @@ impl App {
         // işaretlemesi bunun üzerinden yapılır, böylece sonraki bölüm izlenmeden tamamlanmaz.
         let current_shared = std::sync::Arc::new(std::sync::Mutex::new((episode, season)));
 
-        // Sonraki/önceki bölüm geçişi: worker mevcut mpv'yi kapatır, uygulama yeni
-        // bölümü kendi API'siyle çözüp yepyeni bir mpv ile açar (kırılgan loadfile
-        // yaklaşımı yerine sağlam yöntem — ilk bölümün zaten çalışan akışı yeniden kullanılır).
         let mpv_child = std::sync::Arc::new(std::sync::Mutex::new(None::<std::process::Child>));
-        // Worker 'n'/'p' ile sonraki bölüme geçerken mevcut mpv'yi öldürür. Supervisor,
-        // mpv hata ile çıkınca "kaynak bozuk" deyip sonraki kaynağı denesin; AMA worker'ın
-        // öldürdüğü mpv'yi "kaynak hatası" sanıp mevcut bölümü yeniden açmasın diye bu bayrak
-        // kullanılır (true ise supervisor yeniden denemez, çünkü zaten sonraki bölüm tetiklendi).
-        let next_triggered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let (next_tx, next_rx) = std::sync::mpsc::channel::<(Title, Episode)>();
-        {
-            let next_rx = std::sync::Arc::new(std::sync::Mutex::new(next_rx));
-            let this = self.clone_ref();
-            let alive_next = alive.clone();
-            glib::timeout_add_local(std::time::Duration::from_millis(150), move || {
-                let msg = {
-                    let rx = next_rx.lock().unwrap();
-                    match rx.try_recv() {
-                        Ok(m) => Some(m),
-                        Err(_) => None,
-                    }
-                };
-                if let Some((t, e)) = msg {
-                    eprintln!("[NEXT] GTK callback play çağırıyor (title={}, ep={}/{})", t.name, e.season, e.episode);
-                    this.play(&t, &e);
-                }
-                if alive_next.load(std::sync::atomic::Ordering::Relaxed) {
-                    glib::ControlFlow::Continue
-                } else {
-                    glib::ControlFlow::Break
-                }
-            });
-        }
 
         // Worker/supervisor iş parçacıklarından ana iş parçacığına toast bildirimi (GObject'lar Send değil)
         let (toast_tx, toast_rx) = std::sync::mpsc::channel::<String>();
+        const DISMISS_OPENING: &str = "__animecix_dismiss_opening__";
         {
             let toast_rx = std::sync::Arc::new(std::sync::Mutex::new(toast_rx));
             let alive_toast = alive.clone();
             let toast_h = toast.clone();
+            let opening_toast_h = self.opening_toast.clone();
             glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
                 let rx = toast_rx.lock().unwrap();
                 let mut msg: Option<String> = None;
@@ -1712,9 +1677,15 @@ impl App {
                 }
                 drop(rx);
                 if let Some(m) = msg {
-                    let tt = adw::Toast::new(&m);
-                    tt.set_timeout(3);
-                    toast_h.add_toast(tt);
+                    if m == DISMISS_OPENING {
+                        if let Some(t) = opening_toast_h.borrow_mut().take() {
+                            t.dismiss();
+                        }
+                    } else {
+                        let tt = adw::Toast::new(&m);
+                        tt.set_timeout(3);
+                        toast_h.add_toast(tt);
+                    }
                 }
                 if !alive_toast.load(std::sync::atomic::Ordering::Relaxed) {
                     glib::ControlFlow::Break
@@ -1724,25 +1695,16 @@ impl App {
             });
         }
 
-        // İzleme (progress / n-p / aniskip) işçi iş parçacığı — tüm denemeler boyunca yaşar
+        // İzleme (progress / aniskip) işçi iş parçacığı — tüm denemeler boyunca yaşar
         {
             let alive = alive.clone();
             let sock_poll = sock_path.clone();
             let sock_c = sock_path.clone();
-            let cmd_c = cmd_file.clone();
             let aniskip_c = aniskip.clone();
             let client_c = client.clone();
-            let title_c = title.clone();
-            let ep_c = ep.clone();
             let current_shared_c = current_shared.clone();
-            let toast_tx_w = toast_tx.clone();
-            let mpv_child_c = mpv_child.clone();
-            let next_tx_c = next_tx.clone();
-            let next_triggered_w = next_triggered.clone();
             let (sender, receiver) = std::sync::mpsc::channel::<(f64, f64)>();
             std::thread::spawn(move || {
-                let mut current_ep = ep_c.episode;
-                let current_season = ep_c.season;
                 let mut op_prompted = false;
                 let mut ed_prompted = false;
 
@@ -1756,47 +1718,6 @@ impl App {
 
                 loop {
                     if std::path::Path::new(&sock_c).exists() {
-                        // MPV içi 'n' / 'p' kısayolu — loadfile YERİNE uygulama kendisi
-                        // sonraki/önceki bölümü çözüp yepyeni bir mpv ile açsın.
-                        if std::path::Path::new(&cmd_c).exists() {
-                            if let Ok(cmd_str) = std::fs::read_to_string(&cmd_c) {
-                                let _ = std::fs::remove_file(&cmd_c);
-                                let cmd = cmd_str.trim();
-                                let is_next = cmd == "next";
-                                let is_prev = cmd == "prev";
-                                eprintln!("[NEXT] cmd={:?} is_next={} is_prev={} current_ep={}", cmd, is_next, is_prev, current_ep);
-                                if (is_next || is_prev) && (is_next || current_ep > 1) {
-                                    let target_ep = if is_next { current_ep + 1 } else { current_ep - 1 };
-                                    current_ep = target_ep;
-                                    op_prompted = false;
-                                    ed_prompted = false;
-                                    // Yükleniyor göstergesi (mpv üstünde OSD)
-                                    let _ = crate::player::send_mpv_cmd(
-                                        &sock_c,
-                                        "{\"command\":[\"show-text\",\"⏳ Sonraki Bölüm Yükleniyor...\",3000]}\n",
-                                    );
-                                    std::thread::sleep(std::time::Duration::from_millis(300));
-                                    // Mevcut mpv'yi kapat
-                                    if let Some(c) = mpv_child_c.lock().unwrap().as_mut() {
-                                        next_triggered_w.store(true, std::sync::atomic::Ordering::SeqCst);
-                                        let _ = c.kill();
-                                        eprintln!("[NEXT] mpv kill gönderildi (ep->{}", target_ep);
-                                    } else {
-                                        eprintln!("[NEXT] UYARI: mpv_child kilit içi boş, kill edilemedi");
-                                    }
-                                    // GTK ana iş parçacığına sonraki bölümü açtır (uygulama URL'yi çözer)
-                                    match next_tx_c.send((title_c.clone(), Episode {
-                                        episode: target_ep,
-                                        season: current_season,
-                                        name: format!("Bölüm {target_ep}"),
-                                    })) {
-                                        Ok(_) => eprintln!("[NEXT] GTK'ya play mesajı yollandı (ep={})", target_ep),
-                                        Err(e) => eprintln!("[NEXT] HATA: play mesajı yollanamadı: {}", e),
-                                    }
-                                }
-                            }
-                        }
-
                         let (pos, dur) = crate::player::query_mpv_position(&sock_c).unwrap_or((0.0, 0.0));
                         if let Some(st) = aniskip_c.op_start {
                             if !op_prompted && pos >= (st - 1.5) && pos <= (st + 10.0) {
@@ -1807,7 +1728,7 @@ impl App {
                         if let Some(st) = aniskip_c.ed_start {
                             if !ed_prompted && pos >= (st - 1.5) && pos <= (st + 10.0) {
                                 ed_prompted = true;
-                                crate::player::send_mpv_cmd(&sock_c, "{\"command\":[\"show-text\", \"🏁 Outro Başladı ('n' ile Sonraki Bölüm)\", 7000]}\n");
+                                crate::player::send_mpv_cmd(&sock_c, "{\"command\":[\"show-text\", \"🏁 Outro Başladı\", 7000]}\n");
                             }
                         }
                         if sender.send((pos, dur)).is_err() { break; }
@@ -1885,7 +1806,6 @@ impl App {
         {
             let alive = alive.clone();
             let sock_path_c = sock_path.clone();
-            let cmd_file_c = cmd_file.clone();
             let input_conf_path_c = input_conf_path.clone();
             let media_title_c = media_title.clone();
             let toast_tx_c = toast_tx.clone();
@@ -1893,11 +1813,9 @@ impl App {
             let auto_fullscreen_c = auto_fullscreen;
             let upscale_c = upscale;
             let mpv_child_c = mpv_child.clone();
-            let next_triggered_c = next_triggered.clone();
             let candidates: Vec<String> = candidates.to_vec();
             std::thread::spawn(move || {
                 'supervisor: for (i, url) in candidates.iter().enumerate() {
-                    let _ = std::fs::remove_file(&cmd_file_c);
                     let _ = std::fs::remove_file(&sock_path_c);
                     let mut cmd = std::process::Command::new("mpv");
                     cmd.arg("--user-agent=mozilla")
@@ -1925,6 +1843,9 @@ impl App {
                             _ => None,
                         }.as_deref()))
                         .arg(url);
+                    if url.contains("sibnet") {
+                        cmd.arg("--http-header-fields=Referer: https://video.sibnet.ru/");
+                    }
                     eprintln!("[SUP] mpv spawn deneniyor (ep={}, kaynak={}, url={:.80})", episode, i, url);
                     let child = match cmd.spawn() {
                         Ok(c) => c,
@@ -1954,12 +1875,10 @@ impl App {
                         };
                         if exited {
                             // Yeniden deneme kararı: kaynak hatalı çıkışı -> sonraki kaynağı dene;
-                            // worker'ın sonraki bölüme geçiş öldürmesi -> yeniden deneme (zaten geçildi).
                             let retry = Self::decide_retry(
                                 true,
                                 success,
                                 playing,
-                                next_triggered_c.load(std::sync::atomic::Ordering::SeqCst),
                             ).0;
                             if retry {
                                 eprintln!("[SUP] kaynak hatalı çıktı, sonraki kaynağa geçiliyor (ep={}, kaynak={})", episode, i);
@@ -1971,6 +1890,7 @@ impl App {
                         if std::path::Path::new(&sock_path_c).exists() {
                             if !playing {
                                 eprintln!("[SUP] socket belirdi, oynatma başladı (ep={}, kaynak={})", episode, i);
+                                let _ = toast_tx_c.send(DISMISS_OPENING.to_string());
                             }
                             playing = true;
                         }
@@ -2035,13 +1955,13 @@ impl App {
 }
 
 #[cfg(test)]
-mod next_episode_tests {
+mod decide_retry_tests {
     use super::App;
 
     #[test]
     fn decide_retry_source_error_retries() {
-        // Soket belirdi, mpv HATA ile çıktı, worker geçişi yok -> sonraki kaynağı dene
-        let (retry, playing) = App::decide_retry(true, false, true, false);
+        // Soket belirdi, mpv HATA ile çıktı -> sonraki kaynağı dene
+        let (retry, playing) = App::decide_retry(true, false, true);
         assert!(retry, "kaynak hatası yeniden denenmeli");
         assert!(!playing);
     }
@@ -2049,22 +1969,14 @@ mod next_episode_tests {
     #[test]
     fn decide_retry_user_close_no_retry() {
         // Kullanıcı kapattı (success=true) -> yeniden deneme yok
-        let (retry, playing) = App::decide_retry(true, true, true, false);
-        assert!(!retry);
-        assert!(playing);
-    }
-
-    #[test]
-    fn decide_retry_worker_next_no_retry() {
-        // Worker sonraki bölüme geçti (next_triggered) -> mevcut bölümü yeniden açma
-        let (retry, playing) = App::decide_retry(true, false, true, true);
+        let (retry, playing) = App::decide_retry(true, true, true);
         assert!(!retry);
         assert!(playing);
     }
 
     #[test]
     fn decide_retry_not_exited_no_retry() {
-        let (retry, playing) = App::decide_retry(false, false, true, false);
+        let (retry, playing) = App::decide_retry(false, false, true);
         assert!(!retry);
         assert!(playing);
     }
@@ -2073,7 +1985,7 @@ mod next_episode_tests {
     fn decide_retry_never_opened_no_retry_flag() {
         // Hiç açılmadı (playing=false): supervisor'ın else dalı zaten dener;
         // decide_retry yalnızca playing=false döndürmeli.
-        let (retry, playing) = App::decide_retry(true, false, false, false);
+        let (retry, playing) = App::decide_retry(true, false, false);
         assert!(!retry);
         assert!(!playing);
     }
