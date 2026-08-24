@@ -31,7 +31,7 @@ pub enum Msg {
     Cats(Result<Vec<api::Category>, String>),
     Search(Result<Vec<Title>, String>),
     Eps(Title, Result<Vec<Episode>, String>),
-    Play(Title, Episode, Result<Vec<String>, String>),
+    Play(Title, Episode, Result<(Vec<String>, Vec<String>), String>),
 }
 
 pub struct App {
@@ -1521,7 +1521,7 @@ impl App {
                 Err(e) => self.show_error(&e),
             },
             Msg::Play(title, ep, res) => match res {
-                Ok(candidates) => self.play_candidates(&title, &ep, &candidates),
+                Ok((fast, fallback)) => self.play_candidates(&title, &ep, &fast, &fallback),
                 Err(e) => self.show_error(&e),
             },
         }
@@ -1545,10 +1545,19 @@ impl App {
         let is_movie = title.title_type.as_deref() == Some("movie");
         self.busy(true);
         self.spawn(move |c| {
+            // HİBRİT: yalnızca ilk 3 adayı çöz (hızlı açılış); kalan embed'ler
+            // supervisor'da gerektiğinde JIT çözülür (resolve_single).
             let res = if is_movie {
-                c.resolve_movie(title.id).map(|u| vec![u])
+                c.resolve_movie(title.id).map(|u| (vec![u], Vec::new()))
             } else {
-                c.resolve_all(title.id, ep.episode, ep.season)
+                c.resolve_top(title.id, ep.episode, ep.season, 3).and_then(|fast| {
+                    let mut fb = c.episode_candidates(title.id, ep.episode, ep.season)?;
+                    // Hızlı kademe ilk 3 adayı DENEDİ (başarılı + başarısız);
+                    // yedek listesi 4. adaydan başlar.
+                    let tried = 3.min(fb.len());
+                    fb.drain(..tried);
+                    Ok((fast, fb))
+                })
             };
             move || Msg::Play(title, ep, res)
         });
@@ -1592,7 +1601,7 @@ impl App {
         !socket_seen && elapsed_secs >= Self::SOCKET_TIMEOUT_SECS
     }
 
-    fn play_candidates(&self, title: &Title, ep: &Episode, candidates: &[String]) {
+    fn play_candidates(&self, title: &Title, ep: &Episode, candidates: &[String], fallback_embeds: &[String]) {
         let w = api::Watched {
             title_id: title.id,
             episode: ep.episode,
@@ -1853,9 +1862,11 @@ impl App {
             let upscale_c = upscale;
             let mpv_child_c = mpv_child.clone();
             let mut candidates: Vec<String> = candidates.to_vec();
-            // Tamamen kaliteye göre sıralı: resolve_all boyuta (kalite) göre dizer;
-            // sibnet CDN WAF'ı boyutu ölçmemizi engellediğinden doğal olarak sona düşer.
-            // (Kullanıcı sibnet'in başta olmasını istemedi.)
+            // HIZLI KADEME: boyuta göre sıralı ilk kaynaklar. Bitince yedek
+            // embed'ler JIT çözülür, açılış tüm kaynakları beklemez.
+            let fallback_embeds_c = fallback_embeds.to_vec();
+            let client_fb = self.client.clone();
+            let total = candidates.len() + fallback_embeds_c.len();
             // Yerel VPN proxy'si (sing-box/Proton, port 10808) ayaktaysa video trafiğini
             // oradan çıkar — ISS kısıtlamasını aşar. Kapalıysa uygulama normal devam
             // eder (kırılmaz yapı: proxy yoksa bayrak eklenmez).
@@ -1867,7 +1878,21 @@ impl App {
                 eprintln!("[SUP] yerel proxy aktif (127.0.0.1:10808), mpv oradan çıkacak");
             }
             std::thread::spawn(move || {
-                'supervisor: for (i, url) in candidates.iter().enumerate() {
+                'supervisor: for i in 0..total {
+                    let url: String = if i < candidates.len() {
+                        candidates[i].clone()
+                    } else {
+                        // JIT yedek: embed URL'i şimdi çöz; pasif/ölüyse atla
+                        let emb = &fallback_embeds_c[i - candidates.len()];
+                        eprintln!("[SUP] JIT yedek çözümleniyor");
+                        match client_fb.resolve_single(emb) {
+                            Ok(u) => u,
+                            Err(e) => {
+                                eprintln!("[SUP] JIT yedek çözülemedi, geçiliyor: {e}");
+                                continue;
+                            }
+                        }
+                    };
                     let _ = std::fs::remove_file(&sock_path_c);
                     let mut cmd = std::process::Command::new("mpv");
                     cmd.arg("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -1894,7 +1919,7 @@ impl App {
                             "anime4k_ultra" => resolve_upscale_shader("Anime4K_Upscale_CNN_x2_UL.glsl"),
                             _ => None,
                         }.as_deref()))
-                        .arg(url);
+                        .arg(url.as_str());
                     if url.contains("video.sibnet.ru/v/") {
                         // Sibnet CDN'i WAF üzerinden korunuyor: mp4 isteği yalnızca
                         // DOĞRU Referer (embed sayfası) + tarayıcı benzeri UA + Accept
@@ -2017,7 +2042,7 @@ impl App {
                             let _ = c.kill();
                             let _ = c.wait();
                         }
-                        if i + 1 < candidates.len() {
+                        if i + 1 < total {
                             let _ = toast_tx_c.send("Kaynak açılamadı, diğer kaynağa geçiliyor…".to_string());
                             continue;
                         } else {

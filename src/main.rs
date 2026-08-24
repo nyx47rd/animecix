@@ -11,6 +11,12 @@ use gtk::prelude::*;
 use std::process::Command;
 
 fn main() {
+    // glibc malloc arena tavanı — tunable'lar process start'ta okunduğu için
+    // env ile geç ayarlamak işe yaramaz; mallopt ile çalışma anında uygulanır.
+    #[cfg(target_os = "linux")]
+    unsafe {
+        libc::mallopt(libc::M_ARENA_MAX, 2);
+    }
     // --goto <sayfa> seçeneğini GTK'ın "bilinmeyen seçenek" hatası vermemesi için
     // ayıkla; uygulama içinde std::env::args() ile yine okunur.
     let raw_args: Vec<String> = std::env::args().collect();
@@ -29,12 +35,14 @@ fn main() {
         }
     }
 
+    // MALLOC_ARENA_MAX: çok thread'li ayırmalarda glibc arena şişmesini sınırlar
+    // (ölçümde ~5 MB kazanç); hafif moddan bağımsız her zaman açık.
+    std::env::set_var("MALLOC_ARENA_MAX", "2");
     // Hafif mod: GSK_RENDERER ilk pencere oluşturulurken okunduğu için env'i
     // GTK başlamadan set etmeliyiz. Varsayılan KAPALI; Ayarlar'dan açılır.
     let light_mode = api::Client::new().load_settings().light_mode;
     if light_mode {
         std::env::set_var("GSK_RENDERER", "cairo");
-        std::env::set_var("MALLOC_ARENA_MAX", "2");
         eprintln!("[STARTUP] hafif mod aktif (cairo renderer)");
     }
 
@@ -386,6 +394,12 @@ fn main() {
             }
         }
         let app_inst = App::new(app);
+        // Kapak disk önbelleği süpürmesi: 7 günden eski + tavan üstü dosyaları
+        // arka planda temizler (asla arayüzü bloklamaz, hatalar sessizdir).
+        {
+            let sweep_client = app_inst.client.clone();
+            std::thread::spawn(move || sweep_client.sweep_expired_covers());
+        }
         let (auto_update, notify_uptodate) = {
             let s = app_inst.settings.borrow();
             (s.auto_update, s.notify_uptodate)
