@@ -444,7 +444,7 @@ pub fn check_all_dependencies() -> Vec<DepStatus> {
     vec![
         DepStatus {
             name: "Video Oynatıcı (mpv)",
-            desc: "Anime ve filmleri sorunsuz oynatabilmek için gereklidir.",
+            desc: "Anime, dizi ve filmleri sorunsuz oynatabilmek için gereklidir.",
             installed: has_mpv,
             install_cmd: Some(format!("{mpv_cmd}   # ({distro_name})")),
         },
@@ -556,7 +556,7 @@ pub fn install_desktop_entry() -> Result<(), String> {
         "[Desktop Entry]\n\
          Type=Application\n\
          Name=AnimeciX\n\
-         Comment=Türkçe Anime ve Film İzleme İstemcisi\n\
+         Comment=Anime, dizi ve film izleme istemcisi\n\
          Exec=\"{exec_target}\"\n\
          Icon=tr.com.animecix\n\
          Terminal=false\n\

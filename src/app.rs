@@ -141,7 +141,7 @@ impl App {
         header.pack_end(&nav_box);
 
         let search_entry = gtk::SearchEntry::new();
-        search_entry.set_placeholder_text(Some("Anime veya dizi ara…"));
+        search_entry.set_placeholder_text(Some("Anime, dizi veya film ara…"));
         search_entry.set_hexpand(true);
 
         let search_bar = gtk::SearchBar::new();
@@ -913,7 +913,7 @@ impl App {
         if saved.is_empty() {
             let sp = components::create_status_page(
                 "Henüz Favori Eklenmedi",
-                "Beğendiğiniz anime veya dizileri yıldız ikonuna tıklayarak favorilerinize ekleyin.",
+                "Beğendiğiniz anime, dizileri ve filmleri yıldız ikonuna tıklayarak favorilerinize ekleyin.",
                 "starred-symbolic",
             );
             scroll.set_child(Some(&sp));
@@ -1078,7 +1078,7 @@ impl App {
         if results.is_empty() {
             let sp = components::create_status_page(
                 "Sonuç Bulunamadı",
-                "Arama sorgunuza uygun anime veya dizi bulunamadı.",
+                "Arama sorgunuza uygun anime, dizi veya film bulunamadı.",
                 "system-search-symbolic",
             );
             scroll.set_child(Some(&sp));

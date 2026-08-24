@@ -28,7 +28,7 @@ impl MarathonView {
         if marathon_items.is_empty() {
             let sp = crate::ui::components::create_status_page(
                 "İzleme Maratonunuz Boş 🏃‍♂️",
-                "Gelecekte izleyeceğiniz anime veya dizileri detay sayfasındaki maraton butonuna (🏁) tıklayarak ekleyebilirsiniz.",
+                "Gelecekte izleyeceğiniz anime, dizi ve filmleri detay sayfasındaki maraton butonuna (🏁) tıklayarak ekleyebilirsiniz.",
                 "media-playlist-repeat-symbolic",
             );
             root.append(&sp);

@@ -122,7 +122,7 @@ cat > "$APPDIR/tr.com.animecix.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=AnimeciX
-Comment=Türkçe Anime ve Film İzleme İstemcisi
+Comment=Anime, dizi ve film izleme istemcisi
 Exec=animecix
 Icon=tr.com.animecix
 Terminal=false
