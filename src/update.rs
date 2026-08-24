@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 const UPDATE_REPO: &str = "nyx47rd/animecix-app";
 const ASSET_NAME: &str = "AnimeciX-x86_64.AppImage";
-const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Deserialize)]
 struct GithubAsset {
@@ -355,24 +355,28 @@ fn start_update_worker<W: IsA<gtk::Window> + Clone + 'static>(
                 bar.set_fraction(0.0);
                 dlg.set_deletable(true);
                 if let Some(b) = dlg.content().and_then(|w| w.downcast::<gtk::Box>().ok()) {
-                    let has_retry = b
-                        .last_child()
-                        .and_then(|w| w.downcast::<gtk::Button>().ok())
-                        .map(|btn| btn.label().as_deref() == Some("Tekrar Dene"))
-                        .unwrap_or(false);
-                    if !has_retry {
-                        let retry = gtk::Button::with_label("Tekrar Dene");
-                        retry.set_margin_top(8);
-                        let dlg2 = dlg.clone();
-                        let win2 = window.clone();
-                        let url2 = url_c.clone();
-                        let target2 = target_c.clone();
-                        retry.connect_clicked(move |_| {
-                            dlg2.close();
-                            run_update_with_progress(win2.clone(), &url2, &target2);
-                        });
-                        b.append(&retry);
-                    }
+                    // "Tekrar Dene" yeniden dener; altındaki "Tamam" pencereyi
+                    // kapatıp uygulamayı normal akama döndürür (asılı kalmasın).
+                    let retry = gtk::Button::with_label("Tekrar Dene");
+                    retry.set_margin_top(8);
+                    let dlg2 = dlg.clone();
+                    let win2 = window.clone();
+                    let url2 = url_c.clone();
+                    let target2 = target_c.clone();
+                    retry.connect_clicked(move |_| {
+                        dlg2.close();
+                        run_update_with_progress(win2.clone(), &url2, &target2);
+                    });
+                    b.append(&retry);
+
+                    let ok = gtk::Button::with_label("Tamam");
+                    ok.set_margin_top(6);
+                    let dlg3 = dlg.clone();
+                    ok.connect_clicked(move |_| {
+                        dlg3.close();
+                    });
+                    b.append(&ok);
+                    ok.grab_focus();
                 }
                 ControlFlow::Break
             }
