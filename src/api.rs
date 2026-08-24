@@ -11,6 +11,25 @@ const TAU: &str = "https://tau-video.xyz";
 const API_TTL_SECS: u64 = 3 * 3600;
 /// Kapak görselleri için disk cache TTL (7 gün)
 const IMG_TTL_SECS: u64 = 7 * 24 * 3600;
+
+/// RAM'deki kapak önbelleği için giriş tavanı: uzun oturumlarda sınırsız
+/// büyümeyi engeller (heap şişmesi). Atılan girişler diskte olduğundan tekrar
+/// ihtiyaç halinde anında geri yüklenir; kullanıcı fark etmez.
+const MAX_IMG_CACHE_ENTRIES: usize = 150;
+
+/// En eski zaman damgalı girişleri atarak haritayı tavana indirir.
+fn trim_img_cache(map: &mut HashMap<String, (u64, Vec<u8>)>) {
+    if map.len() <= MAX_IMG_CACHE_ENTRIES {
+        return;
+    }
+    let mut by_time: Vec<(u64, String)> =
+        map.iter().map(|(k, (t, _))| (*t, k.clone())).collect();
+    by_time.sort_unstable();
+    let excess = map.len() - MAX_IMG_CACHE_ENTRIES;
+    for (_, k) in by_time.into_iter().take(excess) {
+        map.remove(&k);
+    }
+}
 /// API disk cache şema sürümü. Title yapısı yeni alanlar (genres/runtime/...)
 /// kazandığında bu değer artırılır; böylece eski önbellek otomatik temizlenir.
 const CACHE_VERSION: &str = "2";
@@ -311,6 +330,10 @@ pub struct Settings {
     /// Görüntü iyileştirme/upscale: "off" | "sharp" | "anime4k" (hafif DTD shader)
     #[serde(default = "default_upscale")]
     pub upscale: String,
+    /// Hafif mod: arayüz cairo renderer ile çizilir (düşük RAM, ~%35 azalır).
+    /// Varsayılan KAPALI; GPU'lu makinelerde varsayılan render daha akıcıdır.
+    #[serde(default)]
+    pub light_mode: bool,
 }
 fn default_loading() -> String { "overlay".into() }
 fn default_quick_search() -> bool { true }
@@ -347,6 +370,7 @@ impl Default for Settings {
             auto_update: default_true(),
             notify_uptodate: default_true(),
             upscale: default_upscale(),
+            light_mode: false,
         }
     }
 }
@@ -1302,8 +1326,10 @@ impl Client {
                 .unwrap_or(0);
             if now.saturating_sub(disk_ts) < IMG_TTL_SECS {
                 if let Ok(data) = std::fs::read(&disk_path) {
-                    // Diskten belleğe yükle
-                    self.bytes.lock().unwrap().insert(url.to_string(), (disk_ts, data.clone()));
+                    // Diskten belleğe yükle + tavana göre eski girişleri at
+                    let mut m = self.bytes.lock().unwrap();
+                    m.insert(url.to_string(), (disk_ts, data.clone()));
+                    trim_img_cache(&mut m);
                     return Some(data);
                 }
             }

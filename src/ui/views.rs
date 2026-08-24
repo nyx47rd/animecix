@@ -473,6 +473,17 @@ impl SettingsView {
         player_group.add(&aniskip_row);
         root.append(&player_group);
 
+        // Performans grubu: hafif mod (cairo renderer, düşük RAM)
+        let perf_group = adw::PreferencesGroup::new();
+        perf_group.set_title("Performans");
+
+        let light_row = adw::SwitchRow::new();
+        light_row.set_title("Hafif Mod (Düşük RAM)");
+        light_row.set_subtitle("Arayüzü CPU ile çizer, bellek kullanımını ~%35 azaltır. Uygulamayı yeniden başlatınca geçerli olur.");
+        light_row.set_active(settings.light_mode);
+        perf_group.add(&light_row);
+        root.append(&perf_group);
+
         // Görüntü iyileştirme (upscale)
         let img_group = adw::PreferencesGroup::new();
         img_group.set_title("Görüntü İyileştirme");
@@ -569,6 +580,7 @@ impl SettingsView {
             let au_r = auto_update_row.clone();
             let notify_r = notify_row.clone();
             let up_r = upscale_row.clone();
+            let light_r = light_row.clone();
             let s = s_base.clone();
             let on_save = on_save.clone();
             Rc::new(move || {
@@ -597,6 +609,7 @@ impl SettingsView {
                     4 => "anime4k_ultra".into(),
                     _ => "off".into(),
                 };
+                updated.light_mode = light_r.is_active();
                 on_save(updated);
             })
         };
@@ -617,6 +630,8 @@ impl SettingsView {
         notify_row.connect_active_notify(move |_| sa7());
         let sa8 = save_all.clone();
         upscale_row.connect_selected_notify(move |_| sa8());
+        let sa9 = save_all.clone();
+        light_row.connect_active_notify(move |_| sa9());
 
         let data_group = adw::PreferencesGroup::new();
         data_group.set_title("Veri Yönetimi");

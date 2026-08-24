@@ -6,6 +6,7 @@ mod ui;
 mod update;
 
 use app::App;
+use adw::prelude::*;
 use gtk::prelude::*;
 use std::process::Command;
 
@@ -28,11 +29,23 @@ fn main() {
         }
     }
 
+    // Hafif mod: GSK_RENDERER ilk pencere oluşturulurken okunduğu için env'i
+    // GTK başlamadan set etmeliyiz. Varsayılan KAPALI; Ayarlar'dan açılır.
+    let light_mode = api::Client::new().load_settings().light_mode;
+    if light_mode {
+        std::env::set_var("GSK_RENDERER", "cairo");
+        std::env::set_var("MALLOC_ARENA_MAX", "2");
+        eprintln!("[STARTUP] hafif mod aktif (cairo renderer)");
+    }
+
     let app = adw::Application::builder()
         .application_id("tr.com.animecix")
         .build();
 
     app.connect_activate(|app| {
+        // Elle indirilen AppImage, kurulu kısayola taşındıysa true olur;
+        // bu açılışta güncelleme kontrolü bastırılır ve popup gösterilir.
+        let mut migrated = false;
         if let Some(display) = gtk::gdk::Display::default() {
             let mut base = std::path::PathBuf::new();
             if let Ok(exe) = std::env::current_exe() {
@@ -354,15 +367,47 @@ fn main() {
                 gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
             );
 
-            // Başlatıcı kurulu ise çalışan yeni binary otomatik güncellenir
-            check_and_auto_update_installation();
+            // Başlatıcı kurulu ise çalışan yeni binary otomatik güncellenir.
+            // Elle indirilen FARKLI bir AppImage açıldıysa kısayol bu dosyaya
+            // taşınır ve kullanıcıya bilgi verilir (migrated=true).
+            if check_desktop_entry_installed() {
+                let home = std::env::var("HOME").unwrap_or_default();
+                let desktop_path =
+                    format!("{home}/.local/share/applications/tr.com.animecix.desktop");
+                if !home.is_empty() {
+                    if let Some(old_exec) = parse_desktop_exec(&desktop_path) {
+                        migrated = old_exec != desktop_exec_target(&home);
+                    }
+                }
+                let _ = install_desktop_entry();
+                if migrated {
+                    eprintln!("[STARTUP] kurulu kısayol yeni çalıştırılan AppImage'a taşındı");
+                }
+            }
         }
         let app_inst = App::new(app);
         let (auto_update, notify_uptodate) = {
             let s = app_inst.settings.borrow();
             (s.auto_update, s.notify_uptodate)
         };
-        if auto_update {
+        if migrated {
+            // Elle indirilen AppImage sistem kurulumuna taşındı; kullanıcıya
+            // bildir. Bu açılışta güncelleme kontrolü ÇIKMAZ (kullanıcı zaten
+            // istediği sürümü elle çalıştırdı).
+            let dlg = adw::MessageDialog::builder()
+                .heading("AnimeciX Güncellendi")
+                .body(format!(
+                    "AnimeciX sürümünüz v{} olarak değiştirildi.",
+                    update::CURRENT_VERSION
+                ))
+                .close_response("ok")
+                .default_response("ok")
+                .build();
+            dlg.add_response("ok", "Tamam");
+            dlg.set_response_appearance("ok", adw::ResponseAppearance::Suggested);
+            dlg.set_transient_for(Some(&app_inst.window));
+            dlg.present();
+        } else if auto_update {
             let app_c = app_inst.clone();
             update::check_and_prompt(
                 &app_inst.window,
@@ -446,6 +491,23 @@ pub fn desktop_exec_target(home: &str) -> String {
     } else {
         format!("{home}/.local/bin/animecix")
     }
+}
+
+/// .desktop dosyasındaki Exec= değerini okur (çevresindeki tırnakları soyar).
+/// Elle indirilen AppImage ile kurulu kısayolun karşılaştırmasında kullanılır.
+pub fn parse_desktop_exec(path: &str) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    for line in content.lines() {
+        if let Some(v) = line.strip_prefix("Exec=") {
+            let v = v.trim();
+            let unquoted = v
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .unwrap_or(v);
+            return Some(unquoted.to_string());
+        }
+    }
+    None
 }
 
 pub fn install_desktop_entry() -> Result<(), String> {
@@ -591,6 +653,27 @@ mod tests {
             "/opt/AnimeciX-x86_64.AppImage"
         );
         std::env::remove_var("APPIMAGE");
+    }
+
+    #[test]
+    fn parse_desktop_exec_reads_and_unquotes() {
+        let dir = std::env::temp_dir().join(format!("animecix_dtest_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.desktop");
+        std::fs::write(
+            &path,
+            "[Desktop Entry]\nType=Application\nName=AnimeciX\nExec=\"/opt/x y/AnimeciX.AppImage\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            parse_desktop_exec(path.to_str().unwrap()),
+            Some("/opt/x y/AnimeciX.AppImage".to_string())
+        );
+        // Exec satırı yoksa None
+        let p2 = dir.join("empty.desktop");
+        std::fs::write(&p2, "[Desktop Entry]\nName=x\n").unwrap();
+        assert_eq!(parse_desktop_exec(p2.to_str().unwrap()), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
