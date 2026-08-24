@@ -440,6 +440,51 @@ impl Client {
         self.cache_dir.join("covers").join(format!("{h:x}.{ext}"))
     }
 
+    /// Kapak disk önbelleği toplam tavanı (~200 MB): aşılırsa en eski dosyalar
+    /// silinir. 7 günlük TTL zaten okuma anında uygulanır; bu süpürme yalnızca
+    /// başlangıçta arka planda bir kez çalışır ve arayüzü asla bloklamaz.
+    pub fn sweep_expired_covers(&self) {
+        const COVER_DISK_MAX_BYTES: u64 = 200 * 1024 * 1024;
+        let dir = self.cache_dir.join("covers");
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let Ok(entries) = std::fs::read_dir(&dir) else { return; };
+
+        let mut files: Vec<(u64, u64, PathBuf)> = Vec::new(); // (mtime, size, path)
+        let mut removed_expired = 0u32;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() { continue; }
+            let meta = match entry.metadata() { Ok(m) => m, Err(_) => continue };
+            let mtime = meta.modified().ok()
+                .and_then(|m| m.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(now);
+            let size = meta.len();
+            if now.saturating_sub(mtime) >= IMG_TTL_SECS {
+                let _ = std::fs::remove_file(&path);
+                removed_expired += 1;
+            } else {
+                files.push((mtime, size, path));
+            }
+        }
+
+        let mut total: u64 = files.iter().map(|f| f.1).sum();
+        let mut removed_overcap = 0u32;
+        if total > COVER_DISK_MAX_BYTES {
+            files.sort_unstable_by_key(|f| f.0); // en eskiden
+            for (_, size, path) in &files {
+                if total <= COVER_DISK_MAX_BYTES { break; }
+                if std::fs::remove_file(path).is_ok() {
+                    total = total.saturating_sub(*size);
+                    removed_overcap += 1;
+                }
+            }
+        }
+        if removed_expired + removed_overcap > 0 {
+            eprintln!("[SWEEP] kapak önbelleği: {} süresi dolmuş, {} tavan fazlası silindi", removed_expired, removed_overcap);
+        }
+    }
+
     fn disk_api_load(&self, key: &str) -> Option<(u64, serde_json::Value)> {
         let path = self.api_cache_path(key);
         let text = std::fs::read_to_string(&path).ok()?;
@@ -848,6 +893,7 @@ impl Client {
         let html = self
             .http
             .get(url)
+            .timeout(std::time::Duration::from_secs(4))
             .send()
             .map_err(|e| format!("sibnet: {e}"))?
             .error_for_status()
@@ -869,6 +915,7 @@ impl Client {
         let html = self
             .http
             .get(url)
+            .timeout(std::time::Duration::from_secs(4))
             .send()
             .map_err(|e| format!("streamtape: {e}"))?
             .error_for_status()
@@ -905,6 +952,7 @@ impl Client {
             .http
             .get(&url)
             .header("Accept", "application/json")
+            .timeout(std::time::Duration::from_secs(4))
             .send()
             .map_err(|e| format!("tau api: {e}"))?
             .error_for_status()
@@ -966,6 +1014,124 @@ impl Client {
 
     /// Bölüm için tüm çözülmüş kaynakları (boyut = kalite sırasıyla, en iyi önce) döner.
     /// `resolve` yalnızca en iyisini, `resolve_all` hepsini (fallback için) döndürür.
+    /// Bölümün aday embed URL'lerini öncelik sırasıyla döndürür (ÇÖZÜMSÜZ).
+    /// Tek API çağrısı + sıralama; ağ açısından ucuz olduğu için hızlı kademe
+    /// bitince yedek kaynakları geç çözümlemekte (JIT) kullanılır.
+    pub fn episode_candidates(&self, title_id: u64, episode: u64, season: u64) -> Result<Vec<String>, String> {
+        let key = format!("evp:{title_id}:{season}:{episode}");
+        let d = self.cache_get(&key, 1800, |http| {
+            http.get(format!("{BASE}/secure/episode-videos-points"))
+                .header("Accept", "application/json")
+                .query(&[
+                    ("titleId", &title_id.to_string()),
+                    ("episode", &episode.to_string()),
+                    ("season", &season.to_string()),
+                ])
+                .send()
+                .map_err(|e| e.to_string())?
+                .error_for_status()
+                .map_err(|e| e.to_string())?
+                .json()
+                .map_err(|e| e.to_string())
+        })?;
+        let videos = d["videos"].as_array().cloned().unwrap_or_default();
+        if videos.is_empty() {
+            return Ok(Vec::new());
+        }
+        let points = &d["translatorPoints"];
+
+        let mut groups: Vec<(i64, f64, i64, Vec<serde_json::Value>)> = Vec::new();
+        for v in &videos {
+            let tpl = v["template"].as_i64().unwrap_or(0);
+            let point = points[tpl.to_string()].as_f64().unwrap_or(0.0);
+            let votes = v["positive_votes"].as_i64().unwrap_or(0);
+            if let Some(g) = groups.iter_mut().find(|g| g.0 == tpl) {
+                g.2 += votes;
+                g.3.push(v.clone());
+            } else {
+                groups.push((tpl, point, votes, vec![v.clone()]));
+            }
+        }
+        groups.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.2.cmp(&a.2))
+        });
+
+        let mut candidates = Vec::new();
+        for g in groups.iter() {
+            let mut mirrors = g.3.clone();
+            mirrors.sort_by(|a, b| {
+                let ta = a["url"].as_str().unwrap_or("").contains("tau-video.xyz");
+                let tb = b["url"].as_str().unwrap_or("").contains("tau-video.xyz");
+                // tau en sona; aynı statüde en çok oylanan önce
+                ta.cmp(&tb).then_with(|| {
+                    let va = a["positive_votes"].as_i64().unwrap_or(0);
+                    let vb = b["positive_votes"].as_i64().unwrap_or(0);
+                    vb.cmp(&va)
+                })
+            });
+            for v in mirrors {
+                let u = v["url"].as_str().unwrap_or("").to_string();
+                if !u.is_empty() && !candidates.contains(&u) {
+                    candidates.push(u);
+                }
+                if candidates.len() >= 8 { break; }
+            }
+            if candidates.len() >= 8 { break; }
+        }
+        Ok(candidates)
+    }
+
+    /// HİBRİT HIZLI KADEME: yalnızca ilk `k` adayı paralel çözüp boyuta göre
+    /// sıralar (en kaliteli önce). Açılışı ~1 sn mertebesine indirir; kalan
+    /// adaylar supervisor tarafından JIT çözülür (bkz. app.rs play_candidates).
+    pub fn resolve_top(&self, title_id: u64, episode: u64, season: u64, k: usize) -> Result<Vec<String>, String> {
+        let t0 = std::time::Instant::now();
+        // Öncelik: hızlı kademe; boşsa eski tam yol (tek-embed bölümleri vb.)
+        let candidates = match self.episode_candidates(title_id, episode, season) {
+            Ok(c) if !c.is_empty() => c,
+            _ => return self.resolve_all(title_id, episode, season),
+        };
+        let tier: Vec<String> = candidates.into_iter().take(k.max(1)).collect();
+
+        let found: Vec<(u64, String)> = std::thread::scope(|scope| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            for u in &tier {
+                let tx = tx.clone();
+                let http = self.http.clone();
+                let u = u.clone();
+                scope.spawn(move || {
+                    if let Ok(mp4) = self.resolve_embed(&u) {
+                        // Sibnet CDN WAF nedeniyle HEAD'e 403 verir; boyut zaten 0.
+                        let size = if mp4.contains("video.sibnet.ru") {
+                            0
+                        } else {
+                            http.head(&mp4).timeout(std::time::Duration::from_secs(3)).send()
+                                .ok()
+                                .and_then(|r| r.content_length())
+                                .unwrap_or(0)
+                        };
+                        let _ = tx.send((size, mp4));
+                    }
+                });
+            }
+            drop(tx);
+            rx.iter().collect()
+        });
+
+        if found.is_empty() {
+            return Err("Bölüm videosu çözülemedi".to_string());
+        }
+        let mut found = found;
+        found.sort_by(|a, b| b.0.cmp(&a.0));
+        eprintln!(
+            "[RESOLVE] hızlı kademe: {} aday / {} hazır, {:.2}s",
+            tier.len(), found.len(), t0.elapsed().as_secs_f64()
+        );
+        Ok(found.into_iter().map(|(_, u)| u).collect())
+    }
+
     fn resolve_ranked(&self, title_id: u64, episode: u64, season: u64) -> Result<Vec<(u64, String)>, String> {
         let key = format!("evp:{title_id}:{season}:{episode}");
         let d = self.cache_get(&key, 1800, |http| {
@@ -2348,5 +2514,19 @@ mod tests {
         assert!(t.ed_start.is_some(), "ep9 outro (ed) zamanları bulunmalı; gelen: {t:?}");
         // Makul aralık kontrolü: op videonun ilk 6 dakikası içinde bitmeli
         assert!(t.op_end.unwrap() < 360.0, "op_end makul olmalı");
+    }
+
+    #[test]
+    fn resolve_top_live_fast_tier() {
+        // HİBRİT hızlı kademe (v2.8.4): yalnızca ilk 3 aday çözülür; süre
+        // ölçülür ve sonuç boş olmamalı. Tam çözümlemeden belirgin biçimde
+        // hızlı olmalı (sibnet WAF + ağ değişkenliği için üst sınır 8 sn).
+        let c = Client::new();
+        let t0 = std::time::Instant::now();
+        let urls = c.resolve_top(7354, 7, 1, 3).expect("resolve_top başarısız");
+        let dt = t0.elapsed();
+        eprintln!("[live] resolve_top: {} kaynak, {:.2}s", urls.len(), dt.as_secs_f64());
+        assert!(!urls.is_empty());
+        assert!(dt < std::time::Duration::from_secs(8), "hızlı kademe 8sn'yi aşmamalı ({:?})", dt);
     }
 }

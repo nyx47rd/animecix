@@ -138,6 +138,8 @@ HERE="$(dirname "$(readlink -f "${0}")")"
 export PATH="${HERE}/usr/bin:${PATH}"
 export APPDIR="${HERE}"
 export XDG_DATA_DIRS="${HERE}/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+# glibc malloc arena tavanı: çok thread'li ayırmalarda RAM şişmesini sınırlar
+export MALLOC_ARENA_MAX=2
 exec "${HERE}/usr/bin/animecix" "$@"
 EOF
 
