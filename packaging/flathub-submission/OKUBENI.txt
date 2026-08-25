@@ -1,9 +1,9 @@
 FLATHUB GÖNDERİM ADIMLARI (senin GitHub hesabınla, ~10 dakika)
 ================================================================
 
-Bu klasördeki 2 dosya Flathub deposunun KÖKÜNE gidecek:
-  - io.github.nyx47rd.AnimeciX.yml   (manifest, kaynak=git tag v2.9.3)
-  - cargo-sources.json               (485 crate vendor kaynağı)
+Bu klasördeki TEK dosya Flathub deposunun KÖKÜNE gider:
+  - io.github.nyx47rd.AnimeciX.yml   (manifest, kaynak=git tag v2.9.4;
+    cargo vendor kaynaklari manifest icinden upstream tag'den cekilir)
 
 1) https://github.com/flathub/flathub sayfasına git -> Fork
    !! "Copy the master branch only" kutusunu İŞARETLEME !!
