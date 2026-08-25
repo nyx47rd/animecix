@@ -646,7 +646,7 @@ impl SettingsView {
         let sa9 = save_all.clone();
         light_row.connect_active_notify(move |_| sa9());
         let sa10 = save_all.clone();
-        patience_spin.connect_changed(move |_| sa10());
+        patience_spin.connect_value_changed(move |_| sa10());
 
         let data_group = adw::PreferencesGroup::new();
         data_group.set_title("Veri Yönetimi");

@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "animecix"
-version = "2.8.6"
+version = "2.8.7"
 dependencies = [
  "futures",
  "gdk-pixbuf",
