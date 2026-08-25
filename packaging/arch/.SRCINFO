@@ -1,0 +1,16 @@
+pkgbase = animecix
+pkgname = animecix
+pkgver = 2.9.3
+pkgrel = 1
+pkgdesc = Türkçe anime izleme uygulaması (GTK4/libadwaita + mpv)
+arch = x86_64
+url = https://github.com/nyx47rd/animecix-app
+license = MIT
+makedepends = rust
+makedepends = cargo
+makedepends = git
+depends = gtk4
+depends = libadwaita
+depends = mpv
+source = animecix-2.9.3.tar.gz::https://github.com/nyx47rd/animecix-app/archive/refs/tags/v2.9.3.tar.gz
+sha256sums = 5acc3e868bf0db5bf6079c5ccf7f103e44e1b4a7ca9663839c955a3773fc2d07

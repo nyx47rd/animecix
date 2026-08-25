@@ -73,6 +73,7 @@ fn resolve_upscale_shader(name: &str) -> Option<String> {
     if std::path::Path::new("/app").exists() {
         candidates.push(std::path::PathBuf::from("/app/share/animecix/assets/upscale").join(name));
     }
+    candidates.push(std::path::PathBuf::from("/usr/share/animecix/assets/upscale").join(name));
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
             candidates.push(parent.join("usr/share/animecix/assets/upscale").join(name));

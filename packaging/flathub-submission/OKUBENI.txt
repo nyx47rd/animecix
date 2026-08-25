@@ -1,0 +1,41 @@
+FLATHUB GÖNDERİM ADIMLARI (senin GitHub hesabınla, ~10 dakika)
+================================================================
+
+Bu klasördeki 2 dosya Flathub deposunun KÖKÜNE gidecek:
+  - io.github.nyx47rd.AnimeciX.yml   (manifest, kaynak=git tag v2.9.3)
+  - cargo-sources.json               (485 crate vendor kaynağı)
+
+1) https://github.com/flathub/flathub sayfasına git -> Fork
+   !! "Copy the master branch only" kutusunu İŞARETLEME !!
+
+2) Fork'unu klonla ve new-pr dalından yeni dal oluştur:
+     git clone --branch new-pr https://github.com/<sen>/flathub.git
+     cd flathub
+     git checkout -b animecix-submission new-pr
+
+3) Bu klasördeki iki dosyayı deponun KÖKÜNE kopyala:
+     cp ~/animecix-app/packaging/flathub-submission/* .
+
+4) Commit + push:
+     git add io.github.nyx47rd.AnimeciX.yml cargo-sources.json
+     git commit -m "Add io.github.nyx47rd.AnimeciX"
+     git push -u origin animecix-submission
+
+5) GitHub'da PR aç: base = flathub/new-pr , compare = <sen>/animecix-submission
+   Başlık: Add io.github.nyx47rd.AnimeciX
+   (PR şablonunu SİLME; soruları kısa doldur. AI ile yazılmış uzun metin ekleme.)
+
+6) Otomatik kontroller geçince PR'a yorum yaz:
+     bot, build
+   -> Flathub sunucuları manifest'i DERLER (~15-25 dk). Hata çıkarsa
+   logları bana getir, düzeltiriz; aynı dalda güncelleyip push yeter.
+
+7) İnceleyici sorularını yanıtla. Onaylanınca depo flathub org'una
+   taşınır, sana write-access daveti gelir (1 hafta içinde kabul et,
+   2FA açık olmalı).
+
+8) Doğrulama (doğrulanmış geliştirici rozeti): repo'nda dosya ekle:
+     .well-known/org.flathub.VerifiedApps.txt  ->  içine "io.github.nyx47rd.AnimeciX"
+
+SONRAKİ SÜRÜMLER: inceleme YOK. Kendi flathub/<app-id> deponda
+manifest'teki tag/commit'i güncelleyip push -> otomatik derlenir.
