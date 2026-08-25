@@ -100,15 +100,49 @@ Kaynaktan derlenen sürümde otomatik güncelleme devre dışıdır (sadece AppI
 ## İsteğe bağlı: Daha hızlı video (VPN proxy)
 
 ISS'n video trafiğini kısıtlıyorsa yerelde bir proxy çalıştırman yeterli: uygulama
-`127.0.0.1:10808` portunu görünce mpv trafiğini otomatik oradan geçirir; proxy yoksa
-hiçbir şey değişmez.
+`127.0.0.1:10808` portunu görünce mpv video trafiğini **otomatik** oradan geçirir;
+proxy yoksa hiçbir şey değişmez (kırılmaz yapı).
 
-Örnek kurulum — [ProtonVPN](https://protonvpn.com) ücretsiz hesap + WireGuard config'i
-ile root'suz SOCKS/HTTP proxy ([sing-box](https://github.com/SagerNet/sing-box)):
+Kullanılan araç: [sing-box](https://github.com/SagerNet/sing-box) (root'suz, kullanıcı
+alanında çalışır) + [ProtonVPN](https://protonvpn.com) ücretsiz WireGuard config'i.
 
+### Kurulum (tek seferlik, ~2 dakika)
+
+1. **sing-box indir:** [GitHub Releases](https://github.com/SagerNet/sing-box/releases)
+   sayfasından **Linux x86_64** (`amd64`) `.tar.gz` dosyasını indir. Arşivi aç ve
+   binary'yi koy:
+   ```bash
+   mkdir -p ~/.local/share/singbox
+   tar xzf sing-box-*-linux-amd64.tar.gz
+   cp sing-box-*/sing-box ~/.local/share/singbox/
+   chmod +x ~/.local/share/singbox/sing-box
+   ```
+2. **ProtonVPN WireGuard config al:** protonvpn.com → Giriş → **Downloads** →
+   "WireGuard configuration" → platform **GNU/Linux** → ücretsiz ülke (ör. NL-FREE) →
+   indirilen `.conf` dosyasını şuraya kaydet:
+   ```bash
+   cp ~/İndirilenler/wireguard-config.conf ~/.local/share/singbox/config.json
+   ```
+   (Config dosya adı tam olarak `config.json` olmalı.)
+3. **Başlat:** Uygulamada **Ayarlar → VPN Proxy → Başlat**'a bas. Durum satırı
+   "Çalışıyor"a dönerse hazırsın. (Terminal severler için elle komut:
+   `~/.local/share/singbox/sing-box run -c ~/.local/share/singbox/config.json &`)
+
+### Doğrulama
+
+Durum satırı "Çalışıyor" gösteriyorsa mpv, videoları 127.0.0.1:10808 üzerinden
+çıkarır. Çıkış IP'ni kontrol etmek için:
 ```bash
-sing-box run -c ~/vpn-config.json &   # 10808 portunda proxy ayakta
+curl -x socks5h://127.0.0.1:10808 https://www.gstatic.com/generate_204 -o /dev/null -w "%{http_code}\n"
 ```
+`204` dönüyorsa tünel aktif demektir.
+
+### Notlar
+
+- Uygulama config'i şu sırayla arar: sing-box binary'sinin yanındaki `config.json`,
+  `~/.local/share/singbox/config.json`, `~/vpn-config.json`, `~/sing-box-config.json`.
+- Proxy'yi durdurmak için **Ayarlar → VPN Proxy → Durdur**.
+- Proxy kapatılırsa uygulama normal bağlantıya döner; hiçbir ayarın bozulmaz.
 
 ---
 

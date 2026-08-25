@@ -1461,7 +1461,7 @@ impl Client {
             // hatada tek seferlik yeniden deneme.
             let fetch = |http: &reqwest::blocking::Client| -> Result<serde_json::Value, String> {
                 http.get(format!("https://api.aniskip.com/v2/skip-times/{mal_id}/{ep_num}?types=op&types=ed&episodeLength=0"))
-                    .timeout(std::time::Duration::from_secs(4))
+                    .timeout(std::time::Duration::from_secs(8))
                     .send()
                     .map_err(|e| e.to_string())?
                     .error_for_status()
@@ -1469,11 +1469,19 @@ impl Client {
                     .json()
                     .map_err(|e| e.to_string())
             };
+            // Yavaş ağlarda ilk deneme timeout'a düşebiliyor: toplam 3 deneme.
             match fetch(http) {
                 Ok(v) => Ok(v),
                 Err(first) => {
-                    std::thread::sleep(std::time::Duration::from_millis(400));
-                    fetch(http).map_err(|_| first)
+                    let mut last = first;
+                    for _ in 0..2 {
+                        std::thread::sleep(std::time::Duration::from_millis(400));
+                        match fetch(http) {
+                            Ok(v) => return Ok(v),
+                            Err(e) => last = e,
+                        }
+                    }
+                    Err(last)
                 }
             }
         }) {

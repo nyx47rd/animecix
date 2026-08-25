@@ -88,6 +88,26 @@ fn resolve_upscale_shader(name: &str) -> Option<String> {
     candidates.into_iter().find(|p| p.exists()).map(|p| p.to_string_lossy().into_owned())
 }
 
+/// AniSkip zamanlarından mpv input.conf içeriğini üretir. Zamanlar yoksa
+/// tuşlara "bulunamadı" mesajı bağlanır (eski davranış korunur).
+fn aniskip_input_conf(t: &api::AniSkipTimes) -> String {
+    let fmt_sec = |sec: f64| -> String {
+        let s = sec as u64;
+        format!("{:02}:{:02}", s / 60, s % 60)
+    };
+    let skip_cmd = if let (Some(st), Some(et)) = (t.op_start, t.op_end) {
+        format!("s seek {et:.1} absolute; show-text \"⏩ İntro Atlandı (AniSkip: {} → {})\" 3000\n", fmt_sec(st), fmt_sec(et))
+    } else {
+        "s show-text \"⚠️ İntro zamanı bulunamadı (AniSkip)\" 2500\n".to_string()
+    };
+    let outro_cmd = if let (Some(st), Some(et)) = (t.ed_start, t.ed_end) {
+        format!("e seek {et:.1} absolute; show-text \"⏩ Outro Atlandı (AniSkip: {} → {})\" 3000\n", fmt_sec(st), fmt_sec(et))
+    } else {
+        "e show-text \"⚠️ Outro zamanı bulunamadı (AniSkip)\" 2500\n".to_string()
+    };
+    format!("{skip_cmd}{outro_cmd}S seek -30; show-text \"⏪ 30s Geri\" 2000\nEnd ignore\n")
+}
+
 impl App {
     pub fn new(app: &adw::Application) -> Rc<Self> {
         let client = Arc::new(Client::new());
@@ -1646,27 +1666,22 @@ impl App {
 
         let auto_fullscreen = self.settings.borrow().auto_fullscreen;
         let upscale = self.settings.borrow().upscale.clone();
-        let aniskip = if self.settings.borrow().aniskip_enabled {
-            self.client.fetch_aniskip_timestamps(&title.name, episode)
-        } else {
-            api::AniSkipTimes::default()
-        };
+        let aniskip_enabled = self.settings.borrow().aniskip_enabled;
+        // AniSkip artık UI'ı BLOKLAMAZ: çözücü işçisi arka planda dener (yavaş
+        // ağlarda bölüm boyunca periyodik tekrar), sonucu paylaşılan duruma yazar.
+        let aniskip_shared = std::sync::Arc::new(std::sync::Mutex::new(api::AniSkipTimes::default()));
 
-        let fmt_sec = |sec: f64| -> String {
-            let s = sec as u64;
-            format!("{:02}:{:02}", s / 60, s % 60)
-        };
-
-        let skip_cmd = if let (Some(st), Some(et)) = (aniskip.op_start, aniskip.op_end) {
-            format!("s seek {et:.1} absolute; show-text \"⏩ İntro Atlandı (AniSkip: {} → {})\" 3000\n", fmt_sec(st), fmt_sec(et))
+        // Başlangıçta yer tutucu tuşlar; gerçek seek'ler çözüm bitince IPC
+        // keybind komutuyla ve input.conf dosyası güncellenerek bağlanır.
+        let skip_cmd = if aniskip_enabled {
+            "s show-text \"⏳ AniSkip çözümleniyor…\" 2000\n".to_string()
         } else {
-            "s show-text \"⚠️ İntro zamanı bulunamadı (AniSkip)\" 2500\n".to_string()
+            "s show-text \"AniSkip kapalı (Ayarlar)\" 2000\n".to_string()
         };
-
-        let outro_cmd = if let (Some(st), Some(et)) = (aniskip.ed_start, aniskip.ed_end) {
-            format!("e seek {et:.1} absolute; show-text \"⏩ Outro Atlandı (AniSkip: {} → {})\" 3000\n", fmt_sec(st), fmt_sec(et))
+        let outro_cmd = if aniskip_enabled {
+            "e show-text \"⏳ AniSkip çözümleniyor…\" 2000\n".to_string()
         } else {
-            "e show-text \"⚠️ Outro zamanı bulunamadı (AniSkip)\" 2500\n".to_string()
+            "e show-text \"AniSkip kapalı (Ayarlar)\" 2000\n".to_string()
         };
 
         let input_conf_path = format!("/tmp/animecix-input-{tid}.conf");
@@ -1760,12 +1775,57 @@ impl App {
             });
         }
 
+        // AniSkip çözücü işçisi: UI'ı bloklamaz. Yavaş ağlarda ilk denemeler
+        // timeout'a düşebildiği için bölüm boyunca ~45 sn'de bir yeniden dener
+        // (en fazla 5). Çözülünce input.conf güncellenir + mpv'ye canlı
+        // 'keybind' komutu gönderilir + kullanıcıya haber verilir.
+        if aniskip_enabled {
+            let alive_r = alive.clone();
+            let client_r = client.clone();
+            let name_r = title.name.clone();
+            let shared_r = aniskip_shared.clone();
+            let sock_r = sock_path.clone();
+            let conf_r = input_conf_path.clone();
+            let toast_tx_r = toast_tx.clone();
+            std::thread::spawn(move || {
+                const MAX_TRIES: u32 = 5;
+                for attempt in 0..MAX_TRIES {
+                    if !alive_r.load(std::sync::atomic::Ordering::Relaxed) { return; }
+                    let t = client_r.fetch_aniskip_timestamps(&name_r, episode);
+                    if t.op_end.is_some() || t.ed_end.is_some() {
+                        *shared_r.lock().unwrap() = t;
+                        let t2 = shared_r.lock().unwrap().clone();
+                        let _ = std::fs::write(&conf_r, aniskip_input_conf(&t2));
+                        if std::path::Path::new(&sock_r).exists() {
+                            if let Some(et) = t2.op_end {
+                                crate::player::send_mpv_cmd(&sock_r, &format!("{{\"command\":[\"keybind\",\"s\",\"seek {et:.1} absolute\"]}}\n"));
+                            }
+                            if let Some(et) = t2.ed_end {
+                                crate::player::send_mpv_cmd(&sock_r, &format!("{{\"command\":[\"keybind\",\"e\",\"seek {et:.1} absolute\"]}}\n"));
+                            }
+                        }
+                        let _ = toast_tx_r.send("⏩ AniSkip hazır ('s' ile intro atlarsın)".to_string());
+                        return;
+                    }
+                    if attempt + 1 < MAX_TRIES {
+                        std::thread::sleep(std::time::Duration::from_secs(45));
+                    }
+                }
+                // Pes edildi: tuşlara eski "bulunamadı" mesajını bağla.
+                if std::path::Path::new(&sock_r).exists() {
+                    crate::player::send_mpv_cmd(&sock_r, "{\"command\":[\"keybind\",\"s\",\"show-text \\\"⚠️ İntro zamanı bulunamadı (AniSkip)\\\" 2500\"]}\n");
+                    crate::player::send_mpv_cmd(&sock_r, "{\"command\":[\"keybind\",\"e\",\"show-text \\\"⚠️ Outro zamanı bulunamadı (AniSkip)\\\" 2500\"]}\n");
+                }
+                let _ = toast_tx_r.send("⚠️ AniSkip: intro/outro zamanları bulunamadı".to_string());
+            });
+        }
+
         // İzleme (progress / aniskip) işçi iş parçacığı — tüm denemeler boyunca yaşar
         {
             let alive = alive.clone();
             let sock_poll = sock_path.clone();
             let sock_c = sock_path.clone();
-            let aniskip_c = aniskip.clone();
+            let aniskip_c = aniskip_shared.clone();
             let client_c = client.clone();
             let current_shared_c = current_shared.clone();
             let (sender, receiver) = std::sync::mpsc::channel::<(f64, f64)>();
@@ -1783,15 +1843,19 @@ impl App {
 
                 loop {
                     if std::path::Path::new(&sock_c).exists() {
+                        // AniSkip zamanları arka planda sonradan da çözülebilir;
+                        // her turda güncel anlık görüntüyü al.
+                        let snap = aniskip_c.lock().unwrap().clone();
                         let (pos, dur) = crate::player::query_mpv_position(&sock_c).unwrap_or((0.0, 0.0));
-                        if let Some(st) = aniskip_c.op_start {
-                            if !op_prompted && pos >= (st - 1.5) && pos <= (st + 10.0) {
+                        if let Some(st) = snap.op_start {
+                            // Pencere geniş: yavaş ağda tampon sıçraması uyarıyı kaçırmasın.
+                            if !op_prompted && pos >= (st - 1.5) && pos <= (st + 25.0) {
                                 op_prompted = true;
                                 crate::player::send_mpv_cmd(&sock_c, "{\"command\":[\"show-text\", \"⏩ İntro Başladı ('s' ile atlayabilirsiniz)\", 7000]}\n");
                             }
                         }
-                        if let Some(st) = aniskip_c.ed_start {
-                            if !ed_prompted && pos >= (st - 1.5) && pos <= (st + 10.0) {
+                        if let Some(st) = snap.ed_start {
+                            if !ed_prompted && pos >= (st - 1.5) && pos <= (st + 25.0) {
                                 ed_prompted = true;
                                 crate::player::send_mpv_cmd(&sock_c, "{\"command\":[\"show-text\", \"🏁 Outro Başladı\", 7000]}\n");
                             }

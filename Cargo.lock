@@ -23,6 +23,7 @@ version = "2.8.8"
 dependencies = [
  "futures",
  "gdk-pixbuf",
+ "gio",
  "glib",
  "gtk4",
  "libadwaita",

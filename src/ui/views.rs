@@ -4,6 +4,23 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use crate::api::{Client, HistoryEntry, Settings, Title};
 use crate::ui::episodes_view;
+use gio::prelude::*;
+
+/// Bilgi/hata penceresi: tek "Tamam" butonlu basit dialog. `parent` varsa
+/// üzerine konumlanır (GtkWindow referansı taşınabilir olduğu için & ile alınır).
+pub(crate) fn show_info_dialog(parent: Option<&gtk::Window>, heading: &str, body: &str) {
+    let dialog = adw::MessageDialog::builder()
+        .heading(heading)
+        .body(body)
+        .close_response("ok")
+        .default_response("ok")
+        .build();
+    if let Some(win) = parent {
+        dialog.set_transient_for(Some(win));
+    }
+    dialog.add_response("ok", "Tamam");
+    dialog.present();
+}
 
 /// İzleme Maratonu (To-Do List) Sayfası
 pub struct MarathonView;
@@ -495,6 +512,91 @@ impl SettingsView {
         perf_group.add(&patience_row);
         root.append(&perf_group);
 
+        // VPN Proxy grubu (isteğe bağlı): yerel sing-box/Proton proxy yönetimi.
+        // Port ayaktaysa mpv trafiği otomatik oradan çıkar; kapalıysa hiçbir şey değişmez.
+        let vpn_group = adw::PreferencesGroup::new();
+        vpn_group.set_title("VPN Proxy (İsteğe Bağlı)");
+
+        let vpn_status_row = adw::ActionRow::new();
+        vpn_status_row.set_title("Durum");
+        vpn_status_row.set_subtitle("Yerel proxy (127.0.0.1:10808) üzerinden ISS kısıtlamalarını aşar");
+        let refresh_vpn_status = {
+            let row = vpn_status_row.clone();
+            move || {
+                if crate::vpn::port_alive() {
+                    row.set_subtitle("Çalışıyor — video trafiği 127.0.0.1:10808 üzerinden çıkıyor");
+                    row.remove_css_class("dim-label");
+                } else {
+                    row.set_subtitle("Kapalı — uygulama normal bağlantıyı kullanır");
+                    row.add_css_class("dim-label");
+                }
+            }
+        };
+        refresh_vpn_status();
+        vpn_group.add(&vpn_status_row);
+        root.append(&vpn_group);
+
+        let btn_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let start_btn = gtk::Button::with_label("Başlat");
+        start_btn.add_css_class("suggested-action");
+        start_btn.add_css_class("pill");
+        let stop_btn = gtk::Button::with_label("Durdur");
+        stop_btn.add_css_class("pill");
+        btn_box.append(&start_btn);
+        btn_box.append(&stop_btn);
+        let vpn_btn_row = adw::ActionRow::new();
+        vpn_btn_row.set_title("sing-box (WireGuard → SOCKS köprüsü)");
+        vpn_btn_row.set_subtitle("ProtonVPN ücretsiz hesapla çalışır; kurulum için Başlat'a bas");
+        vpn_btn_row.add_suffix(&btn_box);
+        vpn_group.add(&vpn_btn_row);
+
+        // Durum etiketini güncellemek için ortak kapanış
+        let refresh_status_rc = std::rc::Rc::new(refresh_vpn_status);
+
+        let rs = refresh_status_rc.clone();
+        start_btn.connect_clicked(move |btn| {
+            let parent = btn.root().and_downcast::<gtk::Window>();
+            let rs = rs.clone();
+            glib::spawn_future_local(async move {
+                match crate::vpn::detect() {
+                    None => {
+                        show_info_dialog(parent.as_ref(), "VPN Proxy Kurulumu", &crate::vpn::setup_instructions());
+                        rs();
+                    }
+                    Some((bin, cfg)) => {
+                        // Ağ işini (blocking) UI dışına al
+                        let res = {
+                            let bin = bin.clone();
+                            let cfg = cfg.clone();
+                            gio::spawn_blocking(move || crate::vpn::start(&bin, &cfg)).await
+                        };
+                        match res {
+                            Ok(Ok(())) => {
+                                show_info_dialog(
+                                    parent.as_ref(),
+                                    "VPN Proxy",
+                                    "Proxy başlatıldı.\n\nVideo oynatırken mpv trafiği otomatik olarak 127.0.0.1:10808 üzerinden çıkar.",
+                                );
+                            }
+                            Ok(Err(e)) => show_info_dialog(parent.as_ref(), "VPN Proxy Hatası", &format!("{e}\n\nLog dosyası: {}", crate::vpn::log_path().display())),
+                            Err(_) => show_info_dialog(parent.as_ref(), "VPN Proxy Hatası", "Proxy başlatılırken beklenmeyen bir hata oluştu (süreç çökmüş olabilir)."),
+                        }
+                        rs();
+                    }
+                }
+            });
+        });
+
+        let rs2 = refresh_status_rc.clone();
+        stop_btn.connect_clicked(move |btn| {
+            let parent = btn.root().and_downcast::<gtk::Window>();
+            let killed = crate::vpn::stop();
+            rs2();
+            if !killed {
+                show_info_dialog(parent.as_ref(), "VPN Proxy", "Çalışan sing-box süreci bulunamadı.");
+            }
+        });
+
         // Görüntü iyileştirme (upscale)
         let img_group = adw::PreferencesGroup::new();
         img_group.set_title("Görüntü İyileştirme");
@@ -521,7 +623,7 @@ impl SettingsView {
         // libadwaita 0.6 subtitle etrafında sarılmaz (yalnızca üç nokta ile keser);
         // uzun açıklamayı ayrı bir wrapping etiketle alt satıra geçiriyoruz.
         let upscale_desc = gtk::Label::new(Some(
-            "Yalnızca kaynak çözünürlüğü ekrandan küçükse etki eder. Anime4K: hafif (DTD, iGPU dostu) / normal (CNN orta, gerçek upscale) / ultra (CNN en kaliteli, güçlü GPU önerilir). 'normal' eski 'klasik' modun aksine kaliteyi düşürmez.",
+            "Yalnızca kaynak çözünürlüğü ekrandan küçükse etki eder. Anime4K: hafif (DTD, iGPU dostu) / normal (CNN orta) / ultra (CNN, en kaliteli).",
         ));
         upscale_desc.set_wrap(true);
         upscale_desc.set_xalign(0.0);
