@@ -2446,6 +2446,19 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn settings_source_patience_roundtrips() {
+        // Ayarlar diske yazılıp okunduğunda kaynak açılış sabrı korunmalı
+        // (kullanıcı 40sn ayarladıysa yeniden açılışta 40sn kalmalı).
+        let mut s = Settings::default();
+        assert_eq!(s.source_patience_secs, 20);
+        s.source_patience_secs = 40;
+        let json = serde_json::to_string_pretty(&s).expect("serialize");
+        assert!(json.contains("source_patience_secs"), "alan JSON'da olmalı");
+        let back: Settings = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.source_patience_secs, 40, "sabır korunmalı");
+    }
+
     fn migrate_state_recovers_bare_id_and_alias_fields() {
         // Eski şema: maraton öğesinin `title` alanı düz bir id sayısı, ve favoriler
         // `title` anahtarıyla isim tutuyor olabilir. migrate_state bunları çökertmeden
