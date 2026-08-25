@@ -99,6 +99,9 @@ Kaynaktan derlenen sürümde otomatik güncelleme devre dışıdır (sadece AppI
 
 ## İsteğe bağlı: Daha hızlı video (VPN proxy)
 
+> **Not:** VPN Proxy, Flatpak sürümünde bulunmaz (sandbox, host'ta süreç
+> başlatmaya izin vermez). AppImage ve AUR sürümlerinde kullanılabilir.
+
 ISS'n video trafiğini kısıtlıyorsa yerelde bir proxy çalıştırman yeterli: uygulama
 `127.0.0.1:10808` portunu görünce mpv video trafiğini **otomatik** oradan geçirir;
 proxy yoksa hiçbir şey değişmez (kırılmaz yapı).

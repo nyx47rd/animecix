@@ -491,6 +491,7 @@ impl SettingsView {
         perf_group.add(&patience_row);
         root.append(&perf_group);
 
+        if !crate::vpn::in_flatpak() {
         let vpn_group = adw::PreferencesGroup::new();
         vpn_group.set_title("VPN Proxy (İsteğe Bağlı)");
 
@@ -606,6 +607,7 @@ yerel bir proxy (sing-box + ProtonVPN WireGuard) çalıştırabilirsin.\n\n\
                 rs2();
             });
         });
+        }
 
         let img_group = adw::PreferencesGroup::new();
         img_group.set_title("Görüntü İyileştirme");

@@ -1,6 +1,6 @@
 app-id: io.github.nyx47rd.AnimeciX
 runtime: org.gnome.Platform
-runtime-version: '48'
+runtime-version: '50'
 sdk: org.gnome.Sdk
 command: animecix
 separate-locales: false
@@ -11,8 +11,6 @@ finish-args:
   - --socket=wayland
   - --device=dri
   - --socket=pulseaudio
-  - --talk-name=org.freedesktop.Flatpak
-  - --filesystem=~/.local/share/singbox
 cleanup:
   - /include
   - /lib/pkgconfig
@@ -91,6 +89,9 @@ modules:
     sources:
       - type: git
         url: https://github.com/nyx47rd/animecix-app.git
-        tag: v2.9.3
-        commit: 416626e0786edcbbc091bd72cbe0907fb072002b
-      - cargo-sources.json
+        tag: v2.9.4
+        commit: ae4c284be95519171fd8b31e62b6e0becbdf71ab
+      - type: file
+        url: https://raw.githubusercontent.com/nyx47rd/animecix-app/v2.9.4/packaging/flatpak/cargo-sources.json
+        sha256: b545b18f0e2c60e71d15dccbba82eeaa28127abc130cdf5103ce8c8b2cd34200
+        dest-filename: cargo-sources.json
