@@ -580,20 +580,13 @@ impl App {
         icon.set_pixel_size(84);
         header_box.append(&icon);
 
-        let flatpak = crate::vpn::in_flatpak();
-        let title = gtk::Label::new(Some(if flatpak {
-            "AnimeciX'e Hoş Geldiniz"
-        } else {
-            "AnimeciX Masaüstü Kurulum & Kontrol Sihirbazı"
-        }));
+        let title = gtk::Label::new(Some("AnimeciX Masaüstü Kurulum & Kontrol Sihirbazı"));
         title.add_css_class("title-1");
         header_box.append(&title);
 
-        let desc = gtk::Label::new(Some(if flatpak {
-            "Birkaç hızlı tercihi seç ve hemen izlemeye başla."
-        } else {
+        let desc = gtk::Label::new(Some(
             "Uygulamayı kullanmaya başlamadan önce sistem bağımlılıklarını ve masaüstü entegrasyonunu kontrol edin."
-        }));
+        ));
         desc.add_css_class("dim-label");
         desc.set_wrap(true);
         desc.set_justify(gtk::Justification::Center);
@@ -601,7 +594,6 @@ impl App {
 
         root.append(&header_box);
 
-        if !flatpak {
         let dep_group = adw::PreferencesGroup::new();
         dep_group.set_title("1. Sistem Bağımlılık Kontrolü");
         dep_group.set_description(Some("Uygulamanın sorunsuz çalışabilmesi için gerekli sistem araçları:"));
@@ -627,9 +619,7 @@ impl App {
         }
 
         root.append(&dep_group);
-        }
 
-        if !flatpak {
         let desktop_group = adw::PreferencesGroup::new();
         desktop_group.set_title("2. Masaüstü Uygulama Menüsü Entegrasyonu");
         desktop_group.set_description(Some("AnimeciX'i işletim sisteminizin uygulama başlatıcı menüsüne ekleyin:"));
@@ -686,7 +676,6 @@ impl App {
         desktop_row.add_suffix(&desktop_btn);
         desktop_group.add(&desktop_row);
         root.append(&desktop_group);
-        }
 
         let player_group = adw::PreferencesGroup::new();
         player_group.set_title("3. Hızlı Başlangıç Tercihleri");
@@ -705,7 +694,7 @@ impl App {
         player_group.add(&aniskip_row);
         root.append(&player_group);
 
-        let start_btn = gtk::Button::with_label(if flatpak { "Başla 🚀" } else { "Kurulumu Tamamla ve Başlat 🚀" });
+        let start_btn = gtk::Button::with_label("Kurulumu Tamamla ve Başlat 🚀");
         start_btn.add_css_class("suggested-action");
         start_btn.add_css_class("pill");
         start_btn.add_css_class("title-3");
