@@ -517,6 +517,31 @@ impl SettingsView {
         let vpn_group = adw::PreferencesGroup::new();
         vpn_group.set_title("VPN Proxy (İsteğe Bağlı)");
 
+        // Başlık yanında bilgi butonu: hover'da kısa ipucu, tıklamada detaylı açıklama.
+        let info_btn = gtk::Button::from_icon_name("dialog-information");
+        info_btn.add_css_class("flat");
+        info_btn.add_css_class("circular");
+        info_btn.set_tooltip_text(Some("VPN Proxy ne işe yarar? Tıkla, detaylı açıkla."));
+        info_btn.set_valign(gtk::Align::Center);
+        {
+            let info_btn = info_btn.clone();
+            info_btn.connect_clicked(move |btn| {
+                let parent = btn.root().and_downcast::<gtk::Window>();
+                show_info_dialog(
+                    parent.as_ref(),
+                    "VPN Proxy nedir?",
+                    "ISS'n (internet sağlayıcı) video trafiğini yavaşlatıp kısıtlıyorsa buradan \
+yerel bir proxy (sing-box + ProtonVPN WireGuard) çalıştırabilirsin.\n\n\
+• Proxy ayakta olduğunda uygulama mpv video trafiğini otomatik olarak \
+127.0.0.1:10808 üzerinden çıkarır; root (yönetici) izni gerekmez.\n\
+• Proxy kapalıyken hiçbir şey değişmez, uygulama normal bağlantını kullanır.\n\
+• Başlat/Durdur ile yönetirsin; kurulum için ilk kez 'Başlat' de, adım adım rehber çıkar.\n\
+• Proxy kapatılırsa uygulama otomatik normal bağlantıya döner, hiçbir ayarın bozulmaz.",
+                );
+            });
+        }
+        vpn_group.set_header_suffix(Some(&info_btn));
+
         let vpn_status_row = adw::ActionRow::new();
         vpn_status_row.set_title("Durum");
         vpn_status_row.set_subtitle("Yerel proxy (127.0.0.1:10808) üzerinden ISS kısıtlamalarını aşar");
