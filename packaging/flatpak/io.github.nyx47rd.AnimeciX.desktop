@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=AnimeciX
+GenericName=Anime İzleme Uygulaması
+Comment=Türkçe anime izleme istemcisi (mpv tabanlı)
+Exec=animecix
+Icon=io.github.nyx47rd.AnimeciX
+Terminal=false
+Categories=AudioVideo;Video;GTK;
+StartupWMClass=AnimeciX
+Keywords=anime;video;player;izle;
+X-Purpose-Comment=Türkçe altyazılı anime izleyin

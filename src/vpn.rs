@@ -67,6 +67,10 @@ fn dirs_data_or_home() -> PathBuf {
     }
 }
 
+pub fn in_flatpak() -> bool {
+    std::path::Path::new("/.flatpak-info").exists()
+}
+
 pub fn start(bin: &PathBuf, cfg: &PathBuf) -> Result<(), String> {
     if port_alive() {
         return Ok(());
@@ -79,8 +83,19 @@ pub fn start(bin: &PathBuf, cfg: &PathBuf) -> Result<(), String> {
         .open(&log).map_err(|e| format!("log açılamadı ({}): {e}", log.display()))?;
     let errf = logf.try_clone().map_err(|e| e.to_string())?;
     let _ = writeln!(logf, "\n[{}] başlatılıyor: {} -c {}", chrono_stamp(), bin.display(), cfg.display());
-    std::process::Command::new(bin)
-        .arg("run")
+    let mut cmd = if in_flatpak() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let mut c = std::process::Command::new("flatpak-spawn");
+        c.arg("--host");
+        if !home.is_empty() {
+            c.arg(format!("--env=HOME={home}"));
+        }
+        c.arg(bin);
+        c
+    } else {
+        std::process::Command::new(bin)
+    };
+    cmd.arg("run")
         .arg("-c")
         .arg(cfg)
         .stdin(std::process::Stdio::null())
@@ -274,5 +289,10 @@ mod tests {
     fn find_singbox_pids_skips_unrelated_processes() {
         let pids = find_singbox_pids();
         assert!(!pids.contains(&(std::process::id() as i32)));
+    }
+
+    #[test]
+    fn in_flatpak_false_on_dev_box() {
+        assert_eq!(in_flatpak(), std::path::Path::new("/.flatpak-info").exists());
     }
 }

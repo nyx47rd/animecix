@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.nyx47rd.AnimeciX</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="io.github.nyx47rd">
+    <name>nyx47rd</name>
+  </developer>
+  <name>AnimeciX</name>
+  <summary>Türkçe anime izleme uygulaması</summary>
+  <summary xml:lang="en">Turkish anime streaming client powered by mpv</summary>
+  <description>
+    <p>
+      AnimeciX; Türkçe altyazılı anime dizilerini izlemek için tasarlanmış hafif ve hızlı bir masaüstü istemcisidir.
+      GTK4/libadwaita ile yazılan arayüz, video oynatmayı mpv'ye devreder.
+    </p>
+    <p>Öne çıkanlar:</p>
+    <ul>
+      <li>Türkçe arayüz ve Türkçe altyazılı içerik desteği</li>
+      <li>Kaldığın yerden devam etme ve marathon (kesintisiz dizi maratonu) modu</li>
+      <li>AniSkip entegrasyonu: intro/outro otomatik atlama ('s' / 'e' tuşları)</li>
+      <li>Anime4K görsel iyileştirme modları (hafif / normal / ultra)</li>
+      <li>İsteğe bağlı VPN proxy yönetimi (sing-box) ile ISS kısıtlamalarını aşma</li>
+      <li>Donanım ivmelendirme ve yavaş bağlantılar için akıllı önbellekleme</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.nyx47rd.AnimeciX.desktop</launchable>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/nyx47rd/animecix-app/main/screenshots/home.png</image>
+      <caption>Ana ekran</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/nyx47rd/animecix-app/main/screenshots/search.png</image>
+      <caption>Arama</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/nyx47rd/animecix-app/main/screenshots/episodes.png</image>
+      <caption>Bölüm listesi</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/nyx47rd/animecix-app/main/screenshots/marathon.png</image>
+      <caption>Marathon modu</caption>
+    </screenshot>
+  </screenshots>
+  <provides>
+    <binary>animecix</binary>
+  </provides>
+  <releases>
+    <release version="2.9.2" date="2026-08-25">
+      <description>
+        <p>Yorum temizliği; vpn modülü harici komutlardan arındırıldı; AppImage dışı kurulumlarda güncelleme kontrolü atlanır.</p>
+      </description>
+    </release>
+    <release version="2.9.1" date="2026-08-25">
+      <description><p>VPN Proxy başlığına bilgi butonu eklendi.</p></description>
+    </release>
+    <release version="2.9.0" date="2026-08-25">
+      <description><p>VPN Proxy durum göstergesi canlı güncellenir.</p></description>
+    </release>
+  </releases>
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">mild</content_attribute>
+  </content_rating>
+  <update_contact>nyx47rd@users.noreply.github.com</update_contact>
+  <url type="homepage">https://github.com/nyx47rd/animecix-app</url>
+  <url type="bugtracker">https://github.com/nyx47rd/animecix-app/issues</url>
+</component>
