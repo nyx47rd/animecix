@@ -338,6 +338,11 @@ pub struct Settings {
     /// Varsayılan KAPALI; GPU'lu makinelerde varsayılan render daha akıcıdır.
     #[serde(default)]
     pub light_mode: bool,
+    /// Kaynak açılış sabrı (sn): medya hiç yüklenmeden ve oynatıcı boşta kalırsa
+    /// bu süre sonunda kaynak ölü sayılıp bir sonrakine geçilir. Yavaş internet
+    /// için artırılabilir (20/45/60/90).
+    #[serde(default = "default_patience")]
+    pub source_patience_secs: u64,
 }
 fn default_loading() -> String { "overlay".into() }
 fn default_quick_search() -> bool { true }
@@ -345,6 +350,7 @@ fn default_shortcut() -> String { "/".into() }
 fn default_search_shortcut() -> String { "Ctrl+S".into() }
 fn default_true() -> bool { true }
 fn default_upscale() -> String { "sharp".into() }
+fn default_patience() -> u64 { 20 }
 
 /// MPV upscale arg'larını döndürür. `shader_path` yalnızca "anime4k*" modlarında kullanılır;
 /// shader bulunamadıysa (`None`) boş döner (özellik zarifçe pas geçilir).
@@ -375,6 +381,7 @@ impl Default for Settings {
             notify_uptodate: default_true(),
             upscale: default_upscale(),
             light_mode: false,
+            source_patience_secs: default_patience(),
         }
     }
 }

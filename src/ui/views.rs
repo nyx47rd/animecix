@@ -482,6 +482,17 @@ impl SettingsView {
         light_row.set_subtitle("Arayüzü CPU ile çizer, bellek kullanımını ~%35 azaltır. Uygulamayı yeniden başlatınca geçerli olur.");
         light_row.set_active(settings.light_mode);
         perf_group.add(&light_row);
+
+        // Kaynak açılış sabrı (yavaş internet için): ölü kaynakta beklenen süre
+        let patience_row = adw::ActionRow::new();
+        patience_row.set_title("Kaynak Açılış Sabrı");
+        patience_row.set_subtitle("Yavaş internet için artırın. Medya hiç açılmazsa ölü kaynakta bu kadar saniye (20-120) beklenir, sonra sıradakine geçilir.");
+        let patience_adj = gtk::Adjustment::new(settings.source_patience_secs as f64, 20.0, 120.0, 5.0, 10.0, 0.0);
+        let patience_spin = gtk::SpinButton::new(Some(&patience_adj), 1.0, 0);
+        patience_spin.set_numeric(true);
+        patience_spin.set_value(settings.source_patience_secs as f64);
+        patience_row.add_suffix(&patience_spin);
+        perf_group.add(&patience_row);
         root.append(&perf_group);
 
         // Görüntü iyileştirme (upscale)
@@ -581,6 +592,7 @@ impl SettingsView {
             let notify_r = notify_row.clone();
             let up_r = upscale_row.clone();
             let light_r = light_row.clone();
+            let patience_spin_c = patience_spin.clone();
             let s = s_base.clone();
             let on_save = on_save.clone();
             Rc::new(move || {
@@ -610,6 +622,7 @@ impl SettingsView {
                     _ => "off".into(),
                 };
                 updated.light_mode = light_r.is_active();
+                updated.source_patience_secs = patience_spin_c.value() as u64;
                 on_save(updated);
             })
         };
@@ -632,6 +645,8 @@ impl SettingsView {
         upscale_row.connect_selected_notify(move |_| sa8());
         let sa9 = save_all.clone();
         light_row.connect_active_notify(move |_| sa9());
+        let sa10 = save_all.clone();
+        patience_spin.connect_changed(move |_| sa10());
 
         let data_group = adw::PreferencesGroup::new();
         data_group.set_title("Veri Yönetimi");
