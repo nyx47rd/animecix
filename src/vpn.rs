@@ -113,6 +113,7 @@ pub fn start(bin: &PathBuf, cfg: &PathBuf) -> Result<(), String> {
 }
 
 /// Çalışan sing-box süreçlerini sonlandırır. En az biri öldürüldüyse true.
+/// Portun (10808) gerçekten kapanmasını bekler; takılırsa SIGKILL'e yükseltir.
 pub fn stop() -> bool {
     let ok = std::process::Command::new("pgrep")
         .arg("-f")
@@ -121,17 +122,42 @@ pub fn stop() -> bool {
         .ok()
         .map(|o| o.stdout)
         .unwrap_or_default();
-    let mut killed = false;
+    let mut pids = Vec::new();
     for line in String::from_utf8_lossy(&ok).lines() {
         if let Ok(pid) = line.trim().parse::<i32>() {
-            let _ = std::process::Command::new("kill")
-                .arg("-TERM")
-                .arg(pid.to_string())
-                .status();
-            killed = true;
+            pids.push(pid);
         }
     }
-    killed
+    if pids.is_empty() {
+        return false;
+    }
+    for pid in &pids {
+        let _ = std::process::Command::new("kill")
+            .arg("-TERM")
+            .arg(pid.to_string())
+            .status();
+    }
+    // Yumuşak kapanışın portu serbest bırakmasını bekle
+    for _ in 0..16 {
+        if !port_alive() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(125));
+    }
+    // Hâlâ yaşıyorsa sert sonlandır
+    for pid in &pids {
+        let _ = std::process::Command::new("kill")
+            .arg("-KILL")
+            .arg(pid.to_string())
+            .status();
+    }
+    for _ in 0..16 {
+        if !port_alive() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(125));
+    }
+    true
 }
 
 /// Kullanıcıya gösterilecek adım adım kurulum metni (Türkçe)

@@ -553,6 +553,14 @@ impl SettingsView {
         // Durum etiketini güncellemek için ortak kapanış
         let refresh_status_rc = std::rc::Rc::new(refresh_vpn_status);
 
+        // Durumu canlı tut: proxy kendi kendine ölse de / durduktan hemen sonra
+        // UI doğruyu yansısın diye ~2 sn'de bir tazele.
+        let live_rs = refresh_status_rc.clone();
+        glib::timeout_add_seconds_local(2, move || {
+            live_rs();
+            glib::ControlFlow::Continue
+        });
+
         let rs = refresh_status_rc.clone();
         start_btn.connect_clicked(move |btn| {
             let parent = btn.root().and_downcast::<gtk::Window>();
@@ -590,11 +598,18 @@ impl SettingsView {
         let rs2 = refresh_status_rc.clone();
         stop_btn.connect_clicked(move |btn| {
             let parent = btn.root().and_downcast::<gtk::Window>();
-            let killed = crate::vpn::stop();
-            rs2();
-            if !killed {
-                show_info_dialog(parent.as_ref(), "VPN Proxy", "Çalışan sing-box süreci bulunamadı.");
-            }
+            let rs2 = rs2.clone();
+            glib::spawn_future_local(async move {
+                // stop() port ölene kadar bekleyebilir; UI'yi dondurmamak için
+                // blocking çağrıyı ayrı iş parçacığına al.
+                let killed = gio::spawn_blocking(|| crate::vpn::stop()).await;
+                match killed {
+                    Ok(true) => {}
+                    Ok(false) => show_info_dialog(parent.as_ref(), "VPN Proxy", "Çalışan sing-box süreci bulunamadı."),
+                    Err(_) => show_info_dialog(parent.as_ref(), "VPN Proxy Hatası", "Proxy durdurulurken beklenmeyen bir hata oluştu."),
+                }
+                rs2();
+            });
         });
 
         // Görüntü iyileştirme (upscale)
