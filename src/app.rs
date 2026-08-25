@@ -31,7 +31,7 @@ pub enum Msg {
     Cats(Result<Vec<api::Category>, String>),
     Search(Result<Vec<Title>, String>),
     Eps(Title, Result<Vec<Episode>, String>),
-    Play(Title, Episode, Result<(Vec<String>, Vec<String>), String>),
+    Play(Title, Episode, Result<(Vec<String>, Vec<String>, Vec<String>), String>),
 }
 
 pub struct App {
@@ -1521,7 +1521,9 @@ impl App {
                 Err(e) => self.show_error(&e),
             },
             Msg::Play(title, ep, res) => match res {
-                Ok((fast, fallback)) => self.play_candidates(&title, &ep, &fast, &fallback),
+                Ok((fast, fast_embeds, fallback)) => {
+                    self.play_candidates(&title, &ep, &fast, &fast_embeds, &fallback)
+                }
                 Err(e) => self.show_error(&e),
             },
         }
@@ -1547,17 +1549,27 @@ impl App {
         self.spawn(move |c| {
             // HİBRİT: yalnızca ilk 3 adayı çöz (hızlı açılış); kalan embed'ler
             // supervisor'da gerektiğinde JIT çözülür (resolve_single).
+            // Tercih edilen host (bu dizide en son ÇALIŞAN kaynak) başa alınır.
+            let pref = c.get_preferred_host(title.id);
             let res = if is_movie {
-                c.resolve_movie(title.id).map(|u| (vec![u], Vec::new()))
+                c.resolve_movie(title.id).map(|u| (vec![u], Vec::new(), Vec::new()))
             } else {
-                c.resolve_top(title.id, ep.episode, ep.season, 3).and_then(|fast| {
-                    let mut fb = c.episode_candidates(title.id, ep.episode, ep.season)?;
-                    // Hızlı kademe ilk 3 adayı DENEDİ (başarılı + başarısız);
-                    // yedek listesi 4. adaydan başlar.
-                    let tried = 3.min(fb.len());
-                    fb.drain(..tried);
-                    Ok((fast, fb))
-                })
+                c.resolve_top(title.id, ep.episode, ep.season, 3, pref.as_deref())
+                    .and_then(|fast_pairs| {
+                        let mut fb = c.episode_candidates(title.id, ep.episode, ep.season)?;
+                        // Hızlı kademe ilk 3 adayı DENEDİ; yedek 4.'den başlar
+                        let tried = 3.min(fb.len());
+                        fb.drain(..tried);
+                        // Tercih edilen hostu yedeklerde de başa al
+                        if let Some(p) = &pref {
+                            fb.sort_by_key(|u| {
+                                if api::Client::source_host_hint(u) == p.as_str() { 0 } else { 1 }
+                            });
+                        }
+                        let fast: Vec<String> = fast_pairs.iter().map(|(m, _)| m.clone()).collect();
+                        let fast_emb: Vec<String> = fast_pairs.iter().map(|(_, e)| e.clone()).collect();
+                        Ok((fast, fast_emb, fb))
+                    })
             };
             move || Msg::Play(title, ep, res)
         });
@@ -1601,7 +1613,7 @@ impl App {
         !socket_seen && elapsed_secs >= Self::SOCKET_TIMEOUT_SECS
     }
 
-    fn play_candidates(&self, title: &Title, ep: &Episode, candidates: &[String], fallback_embeds: &[String]) {
+    fn play_candidates(&self, title: &Title, ep: &Episode, candidates: &[String], fast_embeds: &[String], fallback_embeds: &[String]) {
         let w = api::Watched {
             title_id: title.id,
             episode: ep.episode,
@@ -1865,7 +1877,10 @@ impl App {
             // HIZLI KADEME: boyuta göre sıralı ilk kaynaklar. Bitince yedek
             // embed'ler JIT çözülür, açılış tüm kaynakları beklemez.
             let fallback_embeds_c = fallback_embeds.to_vec();
+            let fast_embeds_c = fast_embeds.to_vec();
+            let candidates_len_c = candidates.len();
             let client_fb = self.client.clone();
+            let tid_c = title.id;
             let total = candidates.len() + fallback_embeds_c.len();
             // Yerel VPN proxy'si (sing-box/Proton, port 10808) ayaktaysa video trafiğini
             // oradan çıkar — ISS kısıtlamasını aşar. Kapalıysa uygulama normal devam
@@ -2033,6 +2048,18 @@ impl App {
                     eprintln!("[SUP] döngü bitti (ep={}, kaynak={}, playing={})", episode, i, playing);
 
                     if playing {
+                        // ÇALIŞAN kaynağı hatırla: bir dahaki oynatmada bu host
+                        // kademenin başına alınır (kullanıcı tarafında doğrulanmış).
+                        let src_hint = if i < fast_embeds_c.len() {
+                            api::Client::source_host_hint(&fast_embeds_c[i])
+                        } else if i >= candidates_len_c {
+                            api::Client::source_host_hint(&fallback_embeds_c[i - candidates_len_c])
+                        } else {
+                            ""
+                        };
+                        if !src_hint.is_empty() {
+                            client_fb.set_preferred_host(tid_c, src_hint);
+                        }
                         // Bölüm başarıyla açıldı; mpv kapandığında başka kaynağı denemiyoruz.
                         // Worker bu mpv'yi artık kilitlemeyeceğinden kilitli wait güvenli.
                         if let Some(c) = mpv_child_c.lock().unwrap().as_mut() { let _ = c.wait(); }

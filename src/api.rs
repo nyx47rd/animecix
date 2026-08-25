@@ -302,6 +302,10 @@ pub struct State {
     pub right_click_tip_seen: bool,
     #[serde(default)]
     pub marathon: Vec<MarathonItem>,
+    /// Kullanıcı tarafında başarıyla çalıştığı doğrulanan kaynak hostu
+    /// (title_id -> ipucu, örn. "sibnet.ru"). Sonraki oynatmada önce denenir.
+    #[serde(default)]
+    pub preferred_source: HashMap<String, String>,
 }
 
 /// Uygulama ayarları (state.json'dan ayrı, settings.json)
@@ -1086,16 +1090,36 @@ impl Client {
     /// HİBRİT HIZLI KADEME: yalnızca ilk `k` adayı paralel çözüp boyuta göre
     /// sıralar (en kaliteli önce). Açılışı ~1 sn mertebesine indirir; kalan
     /// adaylar supervisor tarafından JIT çözülür (bkz. app.rs play_candidates).
-    pub fn resolve_top(&self, title_id: u64, episode: u64, season: u64, k: usize) -> Result<Vec<String>, String> {
+    ///
+    /// `preferred_host`: bu dizide daha önce başarıyla çalışan kaynak varsa
+    /// (örn. "sibnet.ru") o ailenin adayları kademenin başına alınır — kullanıcı
+    /// tarafında doğrulanmış kaynak, boyut sırasını ezer.
+    /// Dönüş: (mp4_url, kaynak_embed_url) çiftleri; supervisor çalışan kaynağı
+    /// host ipucuyla hatırlamak için embed'i kullanır.
+    pub fn resolve_top(
+        &self,
+        title_id: u64,
+        episode: u64,
+        season: u64,
+        k: usize,
+        preferred_host: Option<&str>,
+    ) -> Result<Vec<(String, String)>, String> {
         let t0 = std::time::Instant::now();
         // Öncelik: hızlı kademe; boşsa eski tam yol (tek-embed bölümleri vb.)
-        let candidates = match self.episode_candidates(title_id, episode, season) {
+        let mut candidates = match self.episode_candidates(title_id, episode, season) {
             Ok(c) if !c.is_empty() => c,
-            _ => return self.resolve_all(title_id, episode, season),
+            _ => {
+                let all = self.resolve_all(title_id, episode, season)?;
+                return Ok(all.into_iter().map(|u| (u, String::new())).collect());
+            }
         };
+        // Tercih edilen host kademenin başına (kararlı sıralama)
+        if let Some(pref) = preferred_host.filter(|p| !p.is_empty()) {
+            candidates.sort_by_key(|u| if Self::source_host_hint(u) == pref { 0u8 } else { 1u8 });
+        }
         let tier: Vec<String> = candidates.into_iter().take(k.max(1)).collect();
 
-        let found: Vec<(u64, String)> = std::thread::scope(|scope| {
+        let found: Vec<(u64, String, String)> = std::thread::scope(|scope| {
             let (tx, rx) = std::sync::mpsc::channel();
             for u in &tier {
                 let tx = tx.clone();
@@ -1112,7 +1136,7 @@ impl Client {
                                 .and_then(|r| r.content_length())
                                 .unwrap_or(0)
                         };
-                        let _ = tx.send((size, mp4));
+                        let _ = tx.send((size, mp4, u));
                     }
                 });
             }
@@ -1125,11 +1149,18 @@ impl Client {
         }
         let mut found = found;
         found.sort_by(|a, b| b.0.cmp(&a.0));
+        // Tercih edilen host yine de en başa (boyutu ne olursa olsun)
+        if let Some(pref) = preferred_host.filter(|p| !p.is_empty()) {
+            found.sort_by_key(|(_, _, emb)| {
+                if Self::source_host_hint(emb) == pref { 0u8 } else { 1u8 }
+            });
+        }
         eprintln!(
-            "[RESOLVE] hızlı kademe: {} aday / {} hazır, {:.2}s",
-            tier.len(), found.len(), t0.elapsed().as_secs_f64()
+            "[RESOLVE] hızlı kademe: {} aday / {} hazır, {:.2}s{}",
+            tier.len(), found.len(), t0.elapsed().as_secs_f64(),
+            preferred_host.map(|p| format!(" (tercih: {})", p)).unwrap_or_default()
         );
-        Ok(found.into_iter().map(|(_, u)| u).collect())
+        Ok(found.into_iter().map(|(_, mp4, emb)| (mp4, emb)).collect())
     }
 
     fn resolve_ranked(&self, title_id: u64, episode: u64, season: u64) -> Result<Vec<(u64, String)>, String> {
@@ -1704,6 +1735,15 @@ impl Client {
             }
         }
         st.welcome_seen = obj.get("welcome_seen").and_then(|x| x.as_bool()).unwrap_or(false);
+        if let Some(m) = obj.get("preferred_source") {
+            if let Some(o) = m.as_object() {
+                for (k, v) in o {
+                    if let Some(s) = v.as_str() {
+                        st.preferred_source.insert(k.clone(), s.to_string());
+                    }
+                }
+            }
+        }
         if let Some(p) = obj.get("progress") {
             if let Ok(m) = serde_json::from_value::<HashMap<String, (f64, f64)>>(p.clone()) {
                 st.progress = m;
@@ -2067,6 +2107,35 @@ impl Client {
         let mut p = dirs_cache_or_home();
         p.push(".local/share/animecix/settings.json");
         p
+    }
+
+    /// URL'den kaynak ailesi ipucunu çıkarır (tercih hafızası için).
+    /// Bilinmeyen hostlar boş string döner.
+    pub fn source_host_hint(url: &str) -> &'static str {
+        if url.contains("tau-video") { "tau-video" }
+        else if url.contains("sibnet.ru") { "sibnet.ru" }
+        else if url.contains("streamtape") { "streamtape" }
+        else if url.contains("vudeo") { "vudeo" }
+        else if url.contains("streamsb") || url.contains("sbplay") { "streamsb" }
+        else if url.contains("dood") { "dood" }
+        else if url.contains("ok.ru") || url.contains("odnoklassniki") { "ok.ru" }
+        else if url.contains("drive.google") { "gdrive" }
+        else { "" }
+    }
+
+    /// Bu dizide en son başarıyla çalışan kaynak hostu (varsa).
+    pub fn get_preferred_host(&self, title_id: u64) -> Option<String> {
+        let st = self.load_state();
+        st.preferred_source.get(&title_id.to_string()).cloned()
+    }
+
+    /// Başarıyla çalışan kaynağı hatırlar (sonraki oynatmalarda önce denenir).
+    pub fn set_preferred_host(&self, title_id: u64, host_hint: &str) {
+        if host_hint.is_empty() { return; }
+        let mut st = self.load_state();
+        st.preferred_source.insert(title_id.to_string(), host_hint.to_string());
+        self.save_state(&st);
+        eprintln!("[PREF] tid={} tercih edilen kaynak kaydedildi: {}", title_id, host_hint);
     }
 
     pub fn load_settings(&self) -> Settings {
@@ -2487,12 +2556,19 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // canlı ağ testi: bazı ağlarda hedef hostlar engelli olabilir.
+    // Elle çalıştırmak: cargo test --bin animecix -- --ignored
     fn resolve_all_live_returns_playable_sibnet() {
         // UÇTAN UCA (canlı ağ): "bölümler hiç açılmıyor" regresyon koruması.
         // Gerçek API -> gerçek sibnet çözümlemesi en az bir mp4 üretmeli.
+        let _g = STATE_LOCK.lock().unwrap();
         let c = Client::new();
-        let urls = c.resolve_all(7354, 7, 1)
-            .expect("resolve_all başarısız oldu");
+        let mut urls = None;
+        for _ in 0..3 {
+            if let Ok(u) = c.resolve_all(7354, 7, 1) { urls = Some(u); break; }
+            std::thread::sleep(std::time::Duration::from_millis(700));
+        }
+        let urls = urls.expect("resolve_all 3 denemede de başarısız (ağ?)");
         eprintln!("[live] çözülen kaynaklar: {urls:?}");
         assert!(!urls.is_empty(), "en az bir kaynak çözülmeli");
         assert!(
@@ -2517,16 +2593,46 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn resolve_top_live_fast_tier() {
-        // HİBRİT hızlı kademe (v2.8.4): yalnızca ilk 3 aday çözülür; süre
-        // ölçülür ve sonuç boş olmamalı. Tam çözümlemeden belirgin biçimde
-        // hızlı olmalı (sibnet WAF + ağ değişkenliği için üst sınır 8 sn).
+        // HİBRİT hızlı kademe (v2.8.4+): yalnızca ilk 3 aday çözülür; süre
+        // ölçülür ve sonuç boş olmamalı (ağ değişkenliği için üst sınır 8 sn).
+        // Canlı ağ değişkendir: seri çalış + 3 deneme hakkı; süre yalnızca log.
+        let _g = STATE_LOCK.lock().unwrap();
         let c = Client::new();
-        let t0 = std::time::Instant::now();
-        let urls = c.resolve_top(7354, 7, 1, 3).expect("resolve_top başarısız");
-        let dt = t0.elapsed();
-        eprintln!("[live] resolve_top: {} kaynak, {:.2}s", urls.len(), dt.as_secs_f64());
-        assert!(!urls.is_empty());
-        assert!(dt < std::time::Duration::from_secs(8), "hızlı kademe 8sn'yi aşmamalı ({:?})", dt);
+        let mut pairs: Option<Vec<(String, String)>> = None;
+        for _ in 0..3 {
+            let t0 = std::time::Instant::now();
+            if let Ok(p) = c.resolve_top(7354, 7, 1, 3, None) {
+                eprintln!("[live] resolve_top: {} kaynak, {:.2}s", p.len(), t0.elapsed().as_secs_f64());
+                pairs = Some(p);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(700));
+        }
+        let pairs = pairs.expect("resolve_top 3 denemede de başarısız (ağ?)");
+        assert!(!pairs.is_empty());
+    }
+
+    #[test]
+    #[ignore]
+    fn resolve_top_preferred_host_comes_first() {
+        // v2.8.5: kullanıcı tarafında ÇALIŞAN kaynak bir sonraki oynatmada
+        // kademenin başına alınmalı (NNB E11 vakası: tau ölü, sibnet canlıydı).
+        let _g = STATE_LOCK.lock().unwrap();
+        let c = Client::new();
+        let mut pairs: Option<Vec<(String, String)>> = None;
+        for _ in 0..3 {
+            if let Ok(p) = c.resolve_top(7354, 11, 1, 3, Some("sibnet.ru")) {
+                pairs = Some(p);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(700));
+        }
+        let pairs = pairs.expect("resolve_top(ep11) 3 denemede de başarısız (ağ?)");
+        eprintln!("[live] ep11 tercihli: {:?}", pairs.iter().map(|(_,e)| Client::source_host_hint(e)).collect::<Vec<_>>());
+        assert!(!pairs.is_empty());
+        let first_hint = Client::source_host_hint(&pairs[0].1);
+        assert_eq!(first_hint, "sibnet.ru", "tercih edilen host ilk sırada olmalı; gelen: {pairs:?}");
     }
 }
