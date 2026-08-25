@@ -1595,8 +1595,6 @@ impl App {
         (false, playing)
     }
 
-    /// Medya hiç yüklenmeden bu kadar sn idle kalırsa kaynak "ölü" sayılır.
-    const SOURCE_DEAD_SECS: u64 = 20;
     /// mpv soketi hiç oluşmadıysa denemeden vazgeçme süresi (sn).
     const SOCKET_TIMEOUT_SECS: u64 = 25;
 
@@ -1604,8 +1602,9 @@ impl App {
     /// core idle'ken ve duration hâlâ 0 iken, eşik süre dolduğunda true.
     /// Bir kez yüklendiyse (duration>0 görüldüyse) kaynak sağlamdır; EOF'taki
     /// duraklama dahil asla bu kararla öldürülmez.
-    fn source_is_dead(elapsed_secs: u64, core_idle: bool, duration: f64, media_loaded: bool) -> bool {
-        !media_loaded && core_idle && duration <= 0.0 && elapsed_secs >= Self::SOURCE_DEAD_SECS
+    /// `threshold_secs` kullanıcı ayarıdır (varsayılan 20, yavaş internet için artırılabilir).
+    fn source_is_dead(elapsed_secs: u64, core_idle: bool, duration: f64, media_loaded: bool, threshold_secs: u64) -> bool {
+        !media_loaded && core_idle && duration <= 0.0 && elapsed_secs >= threshold_secs
     }
 
     /// mpv soketi hiç belirmeden süre dolduysa true (kaynağı hiç açamadı).
@@ -1881,6 +1880,9 @@ impl App {
             let candidates_len_c = candidates.len();
             let client_fb = self.client.clone();
             let tid_c = title.id;
+            // Kullanıcı ayarı: kaynak açılış sabrı (sn). Ölü kaynak bu süre kadar
+            // beklenir, sonra bir sonrakine geçilir.
+            let patience_c = self.client.load_settings().source_patience_secs.max(10);
             let total = candidates.len() + fallback_embeds_c.len();
             // Yerel VPN proxy'si (sing-box/Proton, port 10808) ayaktaysa video trafiğini
             // oradan çıkar — ISS kısıtlamasını aşar. Kapalıysa uygulama normal devam
@@ -2015,9 +2017,9 @@ impl App {
                         // hata verir / idle kalır / media yüklenmez. Bu durumda supervisor
                         // playing=true sanıp BİR DAHA ASLA başka kaynağa geçmezdi (saatlerce
                         // takılma). KURAL (v2.7.9): medya HİÇ yüklenmediyse (duration hep 0)
-                        // ve core-idle ise SOURCE_DEAD_SECS (20sn) sonunda kaynağı öldür,
-                        // sıradakine geç. Sibnet'in WAF yönlendirme + CDN zinciri yavaş
-                        // olabildiği için eşik bilinçli cömert; bir kez duration>0 görüldüyse
+                        // ve core-idle ise kullanıcı sabrı (source_patience_secs) sonunda
+                        // kaynağı öldür, sıradakine geç. Sibnet'in WAF yönlendirme + CDN zinciri
+                        // yavaş olabildiği için eşik bilinçli cömert; bir kez duration>0 görüldüyse
                         // kaynak SAĞLAMDIR ve bu yol ile asla öldürülmez (EOF'taki duraklama
                         // dahil). v2.7.7'deki 8sn eşiği yavaş yüklenen kaynakları daha
                         // açılmadan öldürüp TÜM bölümlerin açılamamasına yol açmıştı.
@@ -2028,7 +2030,7 @@ impl App {
                                 media_loaded = true;
                             }
                             let elapsed_secs = start.elapsed().as_secs();
-                            if Self::source_is_dead(elapsed_secs, idle >= 1.0, dur, media_loaded) {
+                            if Self::source_is_dead(elapsed_secs, idle >= 1.0, dur, media_loaded, patience_c) {
                                 eprintln!("[SUP] kaynak hiç yüklemedi (idle+duration=0, {}sn), sonraki kaynağa geçiliyor (ep={}, kaynak={})", elapsed_secs, episode, i);
                                 let _ = toast_tx_c.send("Kaynak açıldı ama oynatamadı, diğer kaynağa geçiliyor…".to_string());
                                 if let Some(c) = mpv_child_c.lock().unwrap().as_mut() {
@@ -2152,30 +2154,37 @@ mod decide_retry_tests {
     fn slow_source_within_window_is_not_killed() {
         // REGRESYON (v2.7.7): sibnet WAF+CDN zinciri 8-20sn sürebilir;
         // yavaş ama sağlam kaynak eşik dolmadan KESİNLİKLE öldürülmemeli.
-        assert!(!App::source_is_dead(5, true, 0.0, false), "5sn'de öldürülmemeli");
-        assert!(!App::source_is_dead(19, true, 0.0, false), "19sn'de hâlâ sabırlı olunmalı");
+        assert!(!App::source_is_dead(5, true, 0.0, false, 20), "5sn'de öldürülmemeli");
+        assert!(!App::source_is_dead(19, true, 0.0, false, 20), "19sn'de hâlâ sabırlı olunmalı");
     }
 
     #[test]
     fn never_loaded_idle_source_is_dead_after_threshold() {
-        assert!(App::source_is_dead(20, true, 0.0, false), "20sn+idle+dur=0 -> ölü");
-        assert!(App::source_is_dead(120, true, 0.0, false));
+        assert!(App::source_is_dead(20, true, 0.0, false, 20), "20sn+idle+dur=0 -> ölü");
+        assert!(App::source_is_dead(120, true, 0.0, false, 20));
+    }
+
+    #[test]
+    fn threshold_is_user_configurable() {
+        // Kullanıcı sabrı 90sn'e çıkarıldıysa 45sn'de öldürülmemeli.
+        assert!(!App::source_is_dead(45, true, 0.0, false, 90), "90sn sabırda 45sn ölü sayılmamalı");
+        assert!(App::source_is_dead(90, true, 0.0, false, 90), "90sn sabırda eşikte ölü");
     }
 
     #[test]
     fn loaded_source_is_never_killed_by_dead_check() {
         // Bir kez duration>0 görüldüyse kaynak sağlamdır: EOF'taki duraklama
         // (idle=1) bile öldürme tetiklememeli.
-        assert!(!App::source_is_dead(600, true, 1435.0, true));
-        assert!(!App::source_is_dead(600, true, 0.0, true), "yüklendiyse duration anlık 0 okunsa bile");
+        assert!(!App::source_is_dead(600, true, 1435.0, true, 20));
+        assert!(!App::source_is_dead(600, true, 0.0, true, 20), "yüklendiyse duration anlık 0 okunsa bile");
     }
 
     #[test]
     fn playing_source_or_unknown_duration_not_dead() {
         // Aktif çalıyor (idle değil) -> ölü değil
-        assert!(!App::source_is_dead(600, false, 0.0, false));
+        assert!(!App::source_is_dead(600, false, 0.0, false, 20));
         // duration bilgisi henüz pozitifse (yükleme sürüyor) -> ölü değil
-        assert!(!App::source_is_dead(600, true, 12.0, false));
+        assert!(!App::source_is_dead(600, true, 12.0, false, 20));
     }
 
     #[test]
