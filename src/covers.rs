@@ -5,10 +5,6 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use crate::api::Client;
 
-/// İstenen boyuta göre kesin (max/min/genişlik/yükseklik) kısıtlama içeren
-/// bir CSS sağlayıcıyı yalnızca bir kez olmak üzere global olarak kaydeder.
-/// Böylece kapak fotoğrafları, global stil dosyası yüklenmese veya parse
-/// edilmese bile asla tam doku boyutuna (ör. 185px) şişmez.
 fn ensure_size_provider(w: i32, h: i32) {
     static CACHE: Mutex<Option<HashMap<(i32, i32), ()>>> = Mutex::new(None);
     let mut guard = CACHE.lock().unwrap();
@@ -36,8 +32,6 @@ fn ensure_size_provider(w: i32, h: i32) {
     map.insert((w, h), ());
 }
 
-/// Verilen boyutta, taşmayı engelleyen kesin kısıtlamalara sahip bir
-/// gtk::Picture widget'ı oluşturur.
 pub fn new_sized_picture(w: i32, h: i32) -> gtk::Picture {
     let pic = gtk::Picture::new();
     pic.set_width_request(w);

@@ -1,7 +1,6 @@
 use gtk::prelude::*;
 use crate::api::Title;
 
-/// Detay kartı bilgi rozetlerini yatay sarılan bir kutuda döndürür.
 fn create_fact_badges(facts: &[String]) -> gtk::Box {
     let box_ = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     box_.set_halign(gtk::Align::Start);
@@ -13,9 +12,6 @@ fn create_fact_badges(facts: &[String]) -> gtk::Box {
     box_
 }
 
-/// Tüm liste kartlarında (ana sayfa, arama, favoriler, maraton, geçmiş) başlıktan
-/// sonra gelen ortak metadata satırı: çevrilmiş türler + "YIL • TÜR • N Sezon".
-/// Kartları tek bir çatı altında toplamak ve tutarlı kılmak için kullanılır.
 pub fn append_title_submeta(info_box: &gtk::Box, t: &Title) {
     if let Some(g) = t.genre_line() {
         let gl = gtk::Label::new(Some(&g));
@@ -35,7 +31,6 @@ pub fn append_title_submeta(info_box: &gtk::Box, t: &Title) {
     info_box.append(&meta);
 }
 
-/// Detay başlık kartı: Poster, Başlık, Yıl, Açıklama, Sezon Bilgisi ve Favori Butonu
 pub fn create_title_detail_header(
     title: &Title,
     poster_widget: &gtk::Picture,
@@ -55,7 +50,6 @@ pub fn create_title_detail_header(
     info_box.set_hexpand(true);
     info_box.set_valign(gtk::Align::Center);
 
-    // Başlık + Favori + Maraton butonu üst satırı
     let name_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let name_lbl = gtk::Label::new(Some(&title.display_name()));
     name_lbl.add_css_class("title-1");
@@ -68,7 +62,6 @@ pub fn create_title_detail_header(
     name_row.append(marathon_btn);
     info_box.append(&name_row);
 
-    // Tür satırı (API'den çevrilmiş): "Dram  •  Bilim Kurgu & Fantezi  •  Aksiyon & Macera"
     if let Some(genre) = title.genre_line() {
         let genre_lbl = gtk::Label::new(Some(&genre));
         genre_lbl.add_css_class("dim-label");
@@ -78,13 +71,11 @@ pub fn create_title_detail_header(
         info_box.append(&genre_lbl);
     }
 
-    // Süre / bölüm / yayın tarihi rozet satırı
     let facts = title.detail_facts();
     if !facts.is_empty() {
         info_box.append(&create_fact_badges(&facts));
     }
 
-    // Açıklama paragrafı
     if let Some(desc) = &title.description {
         let clean_desc = desc.trim();
         if !clean_desc.is_empty() {
@@ -103,7 +94,6 @@ pub fn create_title_detail_header(
     card
 }
 
-/// Tek seferlik bilgilendirme kartı (Kısayol ipucu)
 pub fn create_quick_search_tip_banner(shortcut_str: &str, on_dismiss: impl Fn() + 'static) -> gtk::Box {
     let banner = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     banner.add_css_class("tip-banner");
@@ -138,7 +128,6 @@ pub fn create_quick_search_tip_banner(shortcut_str: &str, on_dismiss: impl Fn() 
     banner
 }
 
-/// Tek seferlik bilgilendirme kartı (Sağ Tık İzlendi ipucu)
 pub fn create_right_click_tip_banner(on_dismiss: impl Fn() + 'static) -> gtk::Box {
     let banner = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     banner.add_css_class("tip-banner");
@@ -172,9 +161,6 @@ pub fn create_right_click_tip_banner(on_dismiss: impl Fn() + 'static) -> gtk::Bo
     banner
 }
 
-/// Özel Film Detay Görünümü: Büyük "Filmi İzle 🎬" butonu ve film bilgileri
-/// Returns (view, progress_bar, time_label) — progress_bar ve time_label
-/// caller tarafından progress_bars HashMap'ine kaydedilmeli ki live güncellenebilsin.
 pub fn create_movie_detail_view(
     title: &Title,
     poster_widget: &gtk::Picture,
@@ -247,7 +233,6 @@ pub fn create_movie_detail_view(
         else { format!("{m}:{:02}", sec) }
     };
 
-    // Her zaman progress bar ve label oluştur (ilk başta gizli olabilir)
     let pb = gtk::ProgressBar::new();
     pb.add_css_class("episode-progress");
     pb.set_margin_top(6);

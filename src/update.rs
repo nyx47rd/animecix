@@ -23,13 +23,10 @@ struct GithubRelease {
     assets: Vec<GithubAsset>,
 }
 
-/// Uygulama bir AppImage olarak mı çalışıyor? (`APPIMAGE` ortam değişkeni AppImage
-/// runtime'ı tarafından ayarlanır; kaynaktan derlenen binary'de yoktur.)
 pub fn is_appimage() -> bool {
     std::env::var("APPIMAGE").map(|v| !v.trim().is_empty()).unwrap_or(false)
 }
 
-/// Semver-benzeri karşılaştırma: `latest`, `current`'dan yeni ise true döner.
 pub fn needs_update(current: &str, latest: &str) -> bool {
     fn parse(v: &str) -> Vec<u32> {
         v.trim_start_matches('v')
@@ -53,7 +50,6 @@ pub fn needs_update(current: &str, latest: &str) -> bool {
     false
 }
 
-/// GitHub release JSON'ından (tag, asset url) çiftini çıkarır.
 pub fn parse_release_json(json: &str) -> Option<(String, String)> {
     let rel: GithubRelease = serde_json::from_str(json).ok()?;
     let url = rel
@@ -85,7 +81,6 @@ fn latest_release() -> Result<GithubRelease, String> {
     resp.json().map_err(|e| e.to_string())
 }
 
-/// İndirilen baytları geçici dosyaya yazar, çalıştırma izni verir ve hedefin üstüne taşır.
 pub fn replace_target(bytes: &[u8], target: &Path) -> Result<(), String> {
     if bytes.len() < 4 || &bytes[0..4] != b"\x7fELF" {
         return Err("İndirilen dosya geçerli bir AppImage değil".into());
@@ -104,10 +99,6 @@ pub fn replace_target(bytes: &[u8], target: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// `url`'i indirir ve `target`'in üstüne yazar. İndirme ilerlemesini
-/// `on_progress(indirilen, toplam)` ile bildirir (toplam bilinmiyorsa 0 gönderilir).
-/// GTK widget'ları `Send` olmadığı için bu fonksiyon ağ işini yapan thread'den
-/// çağrılacak şekilde tasarlandı; geri kalan UI güncellemeleri çağıran tarafta yapılır.
 pub fn download_update<F>(url: &str, target: &Path, mut on_progress: F) -> Result<(), String>
 where
     F: FnMut(u64, u64) + Send + 'static,
@@ -138,8 +129,6 @@ where
     replace_target(&bytes, target)
 }
 
-/// Güncelleme varsa onay dialogu gösterir. `show_if_uptodate` true ise güncelken de bilgi verir.
-/// `on_suppress_uptodate`, güncel sürüm bildirimi "Bir Daha Gösterme" ile kapatıldığında çağrılır.
 pub fn check_and_prompt<W: IsA<gtk::Window> + Clone + 'static>(
     window: &W,
     show_if_uptodate: bool,
@@ -151,7 +140,6 @@ pub fn check_and_prompt<W: IsA<gtk::Window> + Clone + 'static>(
         }
         return;
     }
-    // Ağ işini ayrı thread'de yap (widget'lar Send değildir); sonucu kanaldan ana thread'e taşı.
     let (tx, rx) = channel::<Result<Option<(String, String)>, String>>();
     std::thread::spawn(move || {
         let res = (|| -> Result<Option<(String, String)>, String> {
@@ -170,7 +158,6 @@ pub fn check_and_prompt<W: IsA<gtk::Window> + Clone + 'static>(
         let _ = tx.send(res);
     });
 
-    // Ana thread: kanalı poll et, sonuç gelince dialog'u oluştur (widget yalnızca burada).
     let win = window.clone();
     let mut on_suppress = Some(on_suppress_uptodate);
     glib::idle_add_local(move || match rx.try_recv() {
@@ -204,8 +191,6 @@ fn present_info<W: IsA<gtk::Window>>(window: &W, heading: &str, body: &str) {
     dialog.present();
 }
 
-/// Güncel sürüm bildirimi: "Tamam" ile kapanır; "Bir Daha Gösterme" ile
-/// `on_suppress` çağrılır (ayarlarda `notify_uptodate` kapatılır).
 fn present_uptodate<W: IsA<gtk::Window>>(window: &W, on_suppress: impl Fn() + 'static) {
     let dialog = adw::MessageDialog::builder()
         .heading("Güncel")
@@ -263,7 +248,6 @@ fn present_update_dialog<W: IsA<gtk::Window> + Clone + 'static>(window: W, tag: 
     dialog.present();
 }
 
-/// İndirme + kurulumu ilerleme çubuğu ve adım adım durum metniyle yapan pencere.
 fn run_update_with_progress<W: IsA<gtk::Window> + Clone + 'static>(window: W, url: &str, target: &str) {
     let dlg = adw::Window::builder()
         .title("Güncelleniyor")
@@ -355,8 +339,6 @@ fn start_update_worker<W: IsA<gtk::Window> + Clone + 'static>(
                 bar.set_fraction(0.0);
                 dlg.set_deletable(true);
                 if let Some(b) = dlg.content().and_then(|w| w.downcast::<gtk::Box>().ok()) {
-                    // "Tekrar Dene" yeniden dener; altındaki "Tamam" pencereyi
-                    // kapatıp uygulamayı normal akama döndürür (asılı kalmasın).
                     let retry = gtk::Button::with_label("Tekrar Dene");
                     retry.set_margin_top(8);
                     let dlg2 = dlg.clone();
@@ -430,7 +412,6 @@ mod tests {
         std::fs::remove_file(&tmp).ok();
     }
 
-    /// Yerel bir HTTP sunucu açıp gerçek indirme + ilerleme bildirimini doğrular.
     #[test]
     fn download_update_writes_target_and_reports_progress() {
         use std::io::{Read, Write};

@@ -7,17 +7,11 @@ use serde::{Deserialize, Serialize};
 pub const UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 const BASE: &str = "https://animecix.tv";
 const TAU: &str = "https://tau-video.xyz";
-/// API yanıtları için disk cache TTL (3 saat)
 const API_TTL_SECS: u64 = 3 * 3600;
-/// Kapak görselleri için disk cache TTL (7 gün)
 const IMG_TTL_SECS: u64 = 7 * 24 * 3600;
 
-/// RAM'deki kapak önbelleği için giriş tavanı: uzun oturumlarda sınırsız
-/// büyümeyi engeller (heap şişmesi). Atılan girişler diskte olduğundan tekrar
-/// ihtiyaç halinde anında geri yüklenir; kullanıcı fark etmez.
 const MAX_IMG_CACHE_ENTRIES: usize = 150;
 
-/// En eski zaman damgalı girişleri atarak haritayı tavana indirir.
 fn trim_img_cache(map: &mut HashMap<String, (u64, Vec<u8>)>) {
     if map.len() <= MAX_IMG_CACHE_ENTRIES {
         return;
@@ -30,18 +24,13 @@ fn trim_img_cache(map: &mut HashMap<String, (u64, Vec<u8>)>) {
         map.remove(&k);
     }
 }
-/// API disk cache şema sürümü. Title yapısı yeni alanlar (genres/runtime/...)
-/// kazandığında bu değer artırılır; böylece eski önbellek otomatik temizlenir.
 const CACHE_VERSION: &str = "2";
 
 pub struct Client {
     http: reqwest::blocking::Client,
-    /// Bellek içi API önbellek (key → (unix_ts, json_value))
     cache: std::sync::Mutex<HashMap<String, (u64, serde_json::Value)>>,
-    /// Bellek içi kapak önbellek (url → (unix_ts, bytes))
     bytes: std::sync::Mutex<HashMap<String, (u64, Vec<u8>)>>,
     resolved: std::sync::Mutex<HashMap<String, (u64, String)>>,
-    /// Disk cache klasörü
     cache_dir: PathBuf,
 }
 
@@ -53,18 +42,12 @@ pub struct AniSkipTimes {
     pub ed_end: Option<f64>,
 }
 
-/// Video kaynağı bilgisi — kaynak seçim dialogu için
 #[derive(Clone, Debug)]
 pub struct VideoSource {
-    /// Host adı (tau-video, sibnet, streamtape, ...)
     pub host: String,
-    /// Oy sayısı
     pub votes: i64,
-    /// Çevirmen puanı (varsa)
     pub points: f64,
-    /// Embed URL (çözümlenmemiş)
     pub embed_url: String,
-    /// Kalite etiketi (tau'dan geliyorsa, ör. "1080p")
     pub quality: String,
 }
 
@@ -84,23 +67,17 @@ pub struct Title {
     pub description: Option<String>,
     #[serde(default)]
     pub season_count: Option<i64>,
-    /// Genre display_name listesi (API'den "genres[].display_name")
     #[serde(default)]
     pub genres: Option<Vec<String>>,
-    /// Bölüm/dakika uzunluğu (API'den "runtime")
     #[serde(default)]
     pub runtime: Option<i64>,
-    /// Toplam bölüm sayısı (API'den "episode_count")
     #[serde(default)]
     pub episode_count: Option<i64>,
-    /// Yayın tarihi "YYYY-MM-DD" (API'den "release_date")
     #[serde(default)]
     pub release_date: Option<String>,
 }
 
 impl Title {
-    /// JSON değerinden Title üretir (id, ad, yıl, tür, poster, açıklama, sezon,
-    /// genres, runtime, episode_count ve release_date dahil).
     pub fn from_value(r: &serde_json::Value) -> Option<Title> {
         let id = r["id"].as_u64().or_else(|| r["title_id"].as_u64())?;
         let tt = r["title_type"].as_str().unwrap_or("").to_string();
@@ -133,7 +110,6 @@ impl Title {
         })
     }
 
-    /// Başlık satırı: "Ad (YIL)" veya yıl yoksa sadece ad.
     pub fn display_name(&self) -> String {
         match self.year {
             Some(y) => format!("{} ({})", self.name, y),
@@ -141,7 +117,6 @@ impl Title {
         }
     }
 
-    /// TMDB genre adını Türkçe'ye çevirir (bilinmeyen olduğu gibi döner).
     fn tr_genre(s: &str) -> String {
         let t = match s.trim().to_lowercase().as_str() {
             "drama" => "Dram",
@@ -176,8 +151,6 @@ impl Title {
         t.to_string()
     }
 
-    /// Çevrilmiş tür satırı: "Dram  •  Bilim Kurgu & Fantezi  •  Aksiyon & Macera".
-    /// "Animasyon" gereksiz olduğu için düşürülür.
     pub fn genre_line(&self) -> Option<String> {
         let gens = self.genres.as_ref()?;
         let mut parts: Vec<String> = gens
@@ -193,7 +166,6 @@ impl Title {
         }
     }
 
-    /// "YYYY-MM-DD" -> "D/M/YYYY" (başına sıfır yok)
     fn fmt_release_date(s: &str) -> Option<String> {
         let p: Vec<&str> = s.split('-').collect();
         if p.len() == 3 {
@@ -204,8 +176,6 @@ impl Title {
         None
     }
 
-    /// Detay kartında rozet olarak gösterilecek bilgi parçaları:
-    /// ["24 dakika", "38 bölüm", "Yayın: 29/9/2023"]
     pub fn detail_facts(&self) -> Vec<String> {
         let mut facts: Vec<String> = Vec::new();
         if let Some(rt) = self.runtime {
@@ -226,8 +196,6 @@ impl Title {
         facts
     }
 
-    /// Kart alt satırı için birleşik meta: "YIL  •  TÜR  •  N Sezon".
-    /// Hem maraton hem favoriler aynı formatı kullansın diye tek kaynak.
     pub fn meta_line(&self) -> String {
         let parts: Vec<String> = [
             self.year.map(|y| y.to_string()),
@@ -291,7 +259,6 @@ pub struct State {
     pub history: Vec<HistoryEntry>,
     #[serde(default)]
     pub welcome_seen: bool,
-    /// Bölüm ilerleme konumu: "tid:s:e" -> (pos_sn, dur_sn)
     #[serde(default)]
     pub progress: HashMap<String, (f64, f64)>,
     #[serde(default)]
@@ -302,45 +269,32 @@ pub struct State {
     pub right_click_tip_seen: bool,
     #[serde(default)]
     pub marathon: Vec<MarathonItem>,
-    /// Kullanıcı tarafında başarıyla çalıştığı doğrulanan kaynak hostu
-    /// (title_id -> ipucu, örn. "sibnet.ru"). Sonraki oynatmada önce denenir.
     #[serde(default)]
     pub preferred_source: HashMap<String, String>,
 }
 
-/// Uygulama ayarları (state.json'dan ayrı, settings.json)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Settings {
-    /// "overlay" (yüzen) | "inline" (normal)
     #[serde(default = "default_loading")]
     pub loading_style: String,
     #[serde(default = "default_quick_search")]
     pub quick_search_enabled: bool,
     #[serde(default = "default_shortcut")]
     pub quick_search_shortcut: String,
-    /// Anime/dizi arama kısayolu
     #[serde(default = "default_search_shortcut")]
     pub search_shortcut: String,
     #[serde(default = "default_true")]
     pub auto_fullscreen: bool,
     #[serde(default = "default_true")]
     pub aniskip_enabled: bool,
-    /// Uygulama başlatmada yeni sürümü kontrol edip (AppImage ise) kendini günceller
     #[serde(default = "default_true")]
     pub auto_update: bool,
-    /// Başlatmada güncel sürümdeyken "Güncel" bildirimini göster
     #[serde(default = "default_true")]
     pub notify_uptodate: bool,
-    /// Görüntü iyileştirme/upscale: "off" | "sharp" | "anime4k" (hafif DTD shader)
     #[serde(default = "default_upscale")]
     pub upscale: String,
-    /// Hafif mod: arayüz cairo renderer ile çizilir (düşük RAM, ~%35 azalır).
-    /// Varsayılan KAPALI; GPU'lu makinelerde varsayılan render daha akıcıdır.
     #[serde(default)]
     pub light_mode: bool,
-    /// Kaynak açılış sabrı (sn): medya hiç yüklenmeden ve oynatıcı boşta kalırsa
-    /// bu süre sonunda kaynak ölü sayılıp bir sonrakine geçilir. Yavaş internet
-    /// için artırılabilir (20/45/60/90).
     #[serde(default = "default_patience")]
     pub source_patience_secs: u64,
 }
@@ -352,8 +306,6 @@ fn default_true() -> bool { true }
 fn default_upscale() -> String { "sharp".into() }
 fn default_patience() -> u64 { 20 }
 
-/// MPV upscale arg'larını döndürür. `shader_path` yalnızca "anime4k*" modlarında kullanılır;
-/// shader bulunamadıysa (`None`) boş döner (özellik zarifçe pas geçilir).
 pub(crate) fn upscale_mpv_args(upscale: &str, shader_path: Option<&str>) -> Vec<String> {
     match upscale {
         "sharp" => vec![
@@ -407,9 +359,6 @@ impl Client {
         std::fs::create_dir_all(cache_dir.join("api")).ok();
         std::fs::create_dir_all(cache_dir.join("covers")).ok();
 
-        // Şema sürümü değiştiyse eski API önbelleğini sıfırla (yeni Title alanları
-        // için: genres/runtime/episode_count/release_date). Test derlemesinde atlanır
-        // (testler diski yarıştırmasın; reset yalnızca gerçek sürüm atlamalarında gerekli).
         #[cfg(not(test))]
         {
             let ver_path = cache_dir.join("api").join(".cache_version");
@@ -429,31 +378,24 @@ impl Client {
         }
     }
 
-    // ---- disk cache yardımcıları ----
 
     fn api_cache_path(&self, key: &str) -> PathBuf {
-        // Anahtarı dosya ismine çevir (geçersiz karakterleri kaldır)
         let safe: String = key.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
         self.cache_dir.join("api").join(format!("{safe}.json"))
     }
 
     fn img_cache_path(&self, url: &str) -> PathBuf {
-        // URL'den basit bir hash oluştur
         let mut h: u64 = 0xcbf29ce484222325;
         for b in url.bytes() {
             h ^= b as u64;
             h = h.wrapping_mul(0x100000001b3);
         }
-        // Uzantıyı koru (.jpg, .webp, vb.)
         let ext = url.split('?').next().unwrap_or("").rsplit('.').next()
             .filter(|e| e.len() <= 5 && e.chars().all(|c| c.is_alphanumeric()))
             .unwrap_or("bin");
         self.cache_dir.join("covers").join(format!("{h:x}.{ext}"))
     }
 
-    /// Kapak disk önbelleği toplam tavanı (~200 MB): aşılırsa en eski dosyalar
-    /// silinir. 7 günlük TTL zaten okuma anında uygulanır; bu süpürme yalnızca
-    /// başlangıçta arka planda bir kez çalışır ve arayüzü asla bloklamaz.
     pub fn sweep_expired_covers(&self) {
         const COVER_DISK_MAX_BYTES: u64 = 200 * 1024 * 1024;
         let dir = self.cache_dir.join("covers");
@@ -499,7 +441,6 @@ impl Client {
     fn disk_api_load(&self, key: &str) -> Option<(u64, serde_json::Value)> {
         let path = self.api_cache_path(key);
         let text = std::fs::read_to_string(&path).ok()?;
-        // İlk satır: unix timestamp
         let mut lines = text.splitn(2, '\n');
         let ts: u64 = lines.next()?.trim().parse().ok()?;
         let json: serde_json::Value = serde_json::from_str(lines.next()?).ok()?;
@@ -523,7 +464,6 @@ impl Client {
             .unwrap()
             .as_secs();
 
-        // 1) Belleğe bak
         {
             let mem = self.cache.lock().unwrap();
             if let Some((t, v)) = mem.get(key) {
@@ -533,15 +473,11 @@ impl Client {
             }
         }
 
-        // 2) Diske bak
         if let Some((t, v)) = self.disk_api_load(key) {
             if now.saturating_sub(t) < ttl {
-                // Diskten belleğe yükle
                 self.cache.lock().unwrap().insert(key.to_string(), (t, v.clone()));
                 return Ok(v);
             }
-            // TTL dolmuş ama disk cache var — stale-while-revalidate:
-            // Hemen stale veriyi döndür, arka planda güncellenecek
             let stale = v.clone();
             let t0 = std::time::Instant::now();
             let net_res = loader(&self.http);
@@ -555,14 +491,12 @@ impl Client {
                     return Ok(fresh);
                 }
                 Err(_) => {
-                    // İnternet yoksa stale veriyi kullan
                     self.cache.lock().unwrap().insert(key.to_string(), (now, stale.clone()));
                     return Ok(stale);
                 }
             }
         }
 
-        // 3) Ağ isteği
         let t0 = std::time::Instant::now();
         let v = loader(&self.http)?;
         if std::env::var_os("ANIMECIX_BENCH").is_some() {
@@ -637,18 +571,10 @@ impl Client {
         Ok(out)
     }
 
-    /// state.json'dan yüklenen (eski şemalı) başlıklar yeni alanlara (genres,
-    /// runtime, episode_count, release_date) sahip olmayabilir. Bu yöntem, başlık
-    /// verisini önce önbellekten (bellek+disk), bulunamazsa AĞ üzerinden tazeleyerek
-    /// zengin metadata'yı doldurur. Favoriler/geçmiş/maratondan gelen başlıkların da
-    /// detay kartında (yayın tarihi, bölüm sayısı, süre vb.) zorunlu olarak gözükmesi
-    /// için ağ fellback'i mevcuttur — bölümler zaten ağ'dan çekildiğinden ek gecikme
-    /// ihmal edilebilir. Zaten doluysa olduğu gibi döner.
     pub fn enrich_title(&self, t: &Title) -> Title {
         if t.genres.is_some() || t.runtime.is_some() || t.release_date.is_some() {
             return t.clone();
         }
-        // 1) Ana sayfa listeleri önbelleği (bellek+disk) — anlık.
         if let Ok(cats) = self.home_lists() {
             for cat in &cats {
                 for it in &cat.items {
@@ -658,13 +584,11 @@ impl Client {
                 }
             }
         }
-        // 2) Ağ fellback: id ile ara (aramada detay kartı dolu geldiğinden emin).
         if let Ok(results) = self.search(&t.id.to_string()) {
             if let Some(src) = results.into_iter().find(|x| x.id == t.id) {
                 return src;
             }
         }
-        // 3) Son çare: isimle ara.
         if !t.name.is_empty() {
             if let Ok(results) = self.search(&t.name) {
                 if let Some(src) = results.into_iter().find(|x| x.id == t.id) {
@@ -681,7 +605,6 @@ impl Client {
         }
         let seasons = t.season_count.unwrap_or(1).max(1) as u64;
 
-        // Paralel sezon yükleme (std::thread::scope ile anında paralel HTTP isteği)
         let results: Vec<Result<Vec<Episode>, String>> = std::thread::scope(|scope| {
             let mut handles = Vec::new();
             for s in 1..=seasons {
@@ -745,7 +668,6 @@ impl Client {
         Ok(all)
     }
 
-    /// Tüm sayfaları gezen film/dizi video listesi (kategori: full)
     fn movie_videos(&self, title_id: u64) -> Result<serde_json::Value, String> {
         let key = format!("mvid:{title_id}");
         self.cache_get(&key, 6 * 3600, |http| {
@@ -778,7 +700,6 @@ impl Client {
         })
     }
 
-    /// Film için tek kayıt (İzle butonu açılsın diye) — kaynak varsa
     fn movie_episodes(&self, title_id: u64) -> Result<Vec<Episode>, String> {
         let d = self.movie_videos(title_id)?;
         let has_full = d["data"]
@@ -801,7 +722,6 @@ impl Client {
         }
     }
 
-    /// Film için en yüksek kaliteli kaynağı çözer (tau 1080p tercih, paralel çözümleme)
     pub fn resolve_movie(&self, title_id: u64) -> Result<String, String> {
         let d = self.movie_videos(title_id)?;
         let mut candidates: Vec<serde_json::Value> = Vec::new();
@@ -828,7 +748,6 @@ impl Client {
             return Err("film kaynağı bulunamadı".to_string());
         }
 
-        // Tüm adayları paralel çözümlе, en yüksek boyutlu (en kaliteli) olanı seç
         let found: Option<(u64, String)> = std::thread::scope(|scope| {
             let (tx, rx) = std::sync::mpsc::channel();
             for v in candidates {
@@ -866,7 +785,6 @@ impl Client {
         }
     }
 
-    /// Herhangi bir embed URL'sini mp4'e çözer
     fn resolve_embed(&self, url: &str) -> Result<String, String> {
         if url.contains("tau-video.xyz") {
             let rest = url.split("/embed/").nth(1).unwrap_or("");
@@ -884,10 +802,6 @@ impl Client {
         if url.contains("streamtape.com") {
             return self.streamtape_resolve(url);
         }
-        // Bilinmeyen host: çözüp direkt mp4 veremiyoruz. Eski (çalışan) davranış
-        // gibi bu kaynağı pasif/dead sayıp elemek için Err döndürüyoruz; böylece
-        // çözülemeyen ok.ru / google drive gibi ham embed'ler aday listesine
-        // girmez (kullanıcı "pasif kaynakları eleyelim" istedi).
         let host = url
             .split("//")
             .nth(1)
@@ -899,7 +813,6 @@ impl Client {
         Err(format!("{host} kaynağı şu an çözülemiyor"))
     }
 
-    /// Sibnet: shell.php sayfasından direkt mp4 çeker
     fn sibnet_resolve(&self, url: &str) -> Result<String, String> {
         let html = self
             .http
@@ -921,7 +834,6 @@ impl Client {
         Err("sibnet mp4 bulunamadı".to_string())
     }
 
-    /// Streamtape: get_video URL'sini çeker; "nofile" ise hata
     fn streamtape_resolve(&self, url: &str) -> Result<String, String> {
         let html = self
             .http
@@ -953,7 +865,6 @@ impl Client {
         Err("streamtape çözülemedi".to_string())
     }
 
-    /// Embed id + vid'den tau mp4 URL'si (1080p tercih)
     fn tau_resolve(&self, embed_id: &str, vid: &str) -> Result<String, String> {
         let mut url = format!("{TAU}/api/video/{embed_id}");
         if !vid.is_empty() {
@@ -991,7 +902,6 @@ impl Client {
         }
     }
 
-    /// Embed sayfasından tau-video embed id ve vid alır
     fn find_embed(&self, title_id: u64, episode: u64, season: u64) -> Result<(String, String), String> {
         let url = format!("{BASE}/secure/best-video?titleId={title_id}&episode={episode}&season={season}");
         let resp = self
@@ -1009,7 +919,6 @@ impl Client {
                 return Ok((id[..24].to_string(), vid));
             }
         }
-        // tau-video.xyz/embed/<id>?vid=... redirect olduysa body yerine url kullan
         if let Some(qpos) = final_url.find("?") {
             if final_url.contains("tau-video") && final_url.contains("/embed/") {
                 let rest = &final_url[..qpos];
@@ -1023,11 +932,6 @@ impl Client {
         Err(format!("embed bulunamadı: {final_url}"))
     }
 
-    /// Bölüm için tüm çözülmüş kaynakları (boyut = kalite sırasıyla, en iyi önce) döner.
-    /// `resolve` yalnızca en iyisini, `resolve_all` hepsini (fallback için) döndürür.
-    /// Bölümün aday embed URL'lerini öncelik sırasıyla döndürür (ÇÖZÜMSÜZ).
-    /// Tek API çağrısı + sıralama; ağ açısından ucuz olduğu için hızlı kademe
-    /// bitince yedek kaynakları geç çözümlemekte (JIT) kullanılır.
     pub fn episode_candidates(&self, title_id: u64, episode: u64, season: u64) -> Result<Vec<String>, String> {
         let key = format!("evp:{title_id}:{season}:{episode}");
         let d = self.cache_get(&key, 1800, |http| {
@@ -1075,7 +979,6 @@ impl Client {
             mirrors.sort_by(|a, b| {
                 let ta = a["url"].as_str().unwrap_or("").contains("tau-video.xyz");
                 let tb = b["url"].as_str().unwrap_or("").contains("tau-video.xyz");
-                // tau en sona; aynı statüde en çok oylanan önce
                 ta.cmp(&tb).then_with(|| {
                     let va = a["positive_votes"].as_i64().unwrap_or(0);
                     let vb = b["positive_votes"].as_i64().unwrap_or(0);
@@ -1094,15 +997,6 @@ impl Client {
         Ok(candidates)
     }
 
-    /// HİBRİT HIZLI KADEME: yalnızca ilk `k` adayı paralel çözüp boyuta göre
-    /// sıralar (en kaliteli önce). Açılışı ~1 sn mertebesine indirir; kalan
-    /// adaylar supervisor tarafından JIT çözülür (bkz. app.rs play_candidates).
-    ///
-    /// `preferred_host`: bu dizide daha önce başarıyla çalışan kaynak varsa
-    /// (örn. "sibnet.ru") o ailenin adayları kademenin başına alınır — kullanıcı
-    /// tarafında doğrulanmış kaynak, boyut sırasını ezer.
-    /// Dönüş: (mp4_url, kaynak_embed_url) çiftleri; supervisor çalışan kaynağı
-    /// host ipucuyla hatırlamak için embed'i kullanır.
     pub fn resolve_top(
         &self,
         title_id: u64,
@@ -1112,7 +1006,6 @@ impl Client {
         preferred_host: Option<&str>,
     ) -> Result<Vec<(String, String)>, String> {
         let t0 = std::time::Instant::now();
-        // Öncelik: hızlı kademe; boşsa eski tam yol (tek-embed bölümleri vb.)
         let mut candidates = match self.episode_candidates(title_id, episode, season) {
             Ok(c) if !c.is_empty() => c,
             _ => {
@@ -1120,7 +1013,6 @@ impl Client {
                 return Ok(all.into_iter().map(|u| (u, String::new())).collect());
             }
         };
-        // Tercih edilen host kademenin başına (kararlı sıralama)
         if let Some(pref) = preferred_host.filter(|p| !p.is_empty()) {
             candidates.sort_by_key(|u| if Self::source_host_hint(u) == pref { 0u8 } else { 1u8 });
         }
@@ -1134,7 +1026,6 @@ impl Client {
                 let u = u.clone();
                 scope.spawn(move || {
                     if let Ok(mp4) = self.resolve_embed(&u) {
-                        // Sibnet CDN WAF nedeniyle HEAD'e 403 verir; boyut zaten 0.
                         let size = if mp4.contains("video.sibnet.ru") {
                             0
                         } else {
@@ -1156,7 +1047,6 @@ impl Client {
         }
         let mut found = found;
         found.sort_by(|a, b| b.0.cmp(&a.0));
-        // Tercih edilen host yine de en başa (boyutu ne olursa olsun)
         if let Some(pref) = preferred_host.filter(|p| !p.is_empty()) {
             found.sort_by_key(|(_, _, emb)| {
                 if Self::source_host_hint(emb) == pref { 0u8 } else { 1u8 }
@@ -1219,7 +1109,6 @@ impl Client {
             mirrors.sort_by(|a, b| {
                 let ta = a["url"].as_str().unwrap_or("").contains("tau-video.xyz");
                 let tb = b["url"].as_str().unwrap_or("").contains("tau-video.xyz");
-                // tau en sona; aynı statüde en çok oylanan önce
                 ta.cmp(&tb).then_with(|| {
                     let va = a["positive_votes"].as_i64().unwrap_or(0);
                     let vb = b["positive_votes"].as_i64().unwrap_or(0);
@@ -1236,9 +1125,6 @@ impl Client {
             if candidates.len() >= 8 { break; }
         }
 
-        // Tüm adayları paralel çözümle. Çözülemeyen (bilinmeyen/pasif host)
-        // adaylar resolve_embed içinde elenir; geriye kalanların her biri için
-        // HEAD ile dosya boyutu (kalite) alınır.
         let found: Vec<(u64, String)> = std::thread::scope(|scope| {
             let (tx, rx) = std::sync::mpsc::channel();
             for u in candidates {
@@ -1246,8 +1132,6 @@ impl Client {
                 let http = self.http.clone();
                 scope.spawn(move || {
                     if let Ok(mp4) = self.resolve_embed(&u) {
-                        // Sibnet CDN'i WAF nedeniyle HEAD'e 403 verir; boyut zaten 0
-                        // sayılacak, bu yüzden gereksiz istek atlanır (kaynak testi hızlanır).
                         let size = if mp4.contains("video.sibnet.ru") {
                             0
                         } else {
@@ -1271,22 +1155,18 @@ impl Client {
         }
     }
 
-    /// Direct mp4 URL'si döner — öncelik sırasındaki (en çok oy/panlı) ilk kaynağı seçer
     pub fn resolve(&self, title_id: u64, episode: u64, season: u64) -> Result<String, String> {
         let mut found = self.resolve_ranked(title_id, episode, season)?;
-        // En yüksek kaliteli (en büyük boyutlu) kaynağı seç
         found.sort_by(|a, b| b.0.cmp(&a.0));
         found.into_iter().next().map(|(_, url)| url).ok_or_else(|| "Bölüm videosu çözülemedi".to_string())
     }
 
-    /// Tüm çözülmüş kaynakları kalite (boyut) sırasıyla (en iyi önce) döner — fallback için
     pub fn resolve_all(&self, title_id: u64, episode: u64, season: u64) -> Result<Vec<String>, String> {
         let mut found = self.resolve_ranked(title_id, episode, season)?;
         found.sort_by(|a, b| b.0.cmp(&a.0));
         Ok(found.into_iter().map(|(_, url)| url).collect())
     }
 
-    /// Bölüm için mevcut tüm kaynakları listele (çözümlenmemiş, sadece metadata)
     pub fn list_sources(&self, title_id: u64, episode: u64, season: u64) -> Result<Vec<VideoSource>, String> {
         let key = format!("evp:{title_id}:{season}:{episode}");
         let d = self.cache_get(&key, 1800, |http| {
@@ -1326,7 +1206,6 @@ impl Client {
                 quality: String::new(),
             });
         }
-        // Oy + puana göre sırala
         sources.sort_by(|a, b| {
             b.points.partial_cmp(&a.points).unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| b.votes.cmp(&a.votes))
@@ -1334,7 +1213,6 @@ impl Client {
         Ok(sources)
     }
 
-    /// Film için mevcut tüm kaynakları listele
     pub fn list_movie_sources(&self, title_id: u64) -> Result<Vec<VideoSource>, String> {
         let d = self.movie_videos(title_id)?;
         let mut sources: Vec<VideoSource> = Vec::new();
@@ -1361,12 +1239,10 @@ impl Client {
         Ok(sources)
     }
 
-    /// Tek bir embed URL'ini çözüme kavuştur
     pub fn resolve_single(&self, embed_url: &str) -> Result<String, String> {
         self.resolve_embed(embed_url)
     }
 
-    /// URL'den host adını çıkar
     fn extract_host(url: &str) -> String {
         url.split("//").nth(1)
             .unwrap_or(url)
@@ -1379,11 +1255,7 @@ impl Client {
             .to_string()
     }
 
-    /// Anime adından AniList GraphQL API ile MAL ID (MyAnimeList ID) çözer
     pub fn resolve_mal_id(&self, anime_name: &str) -> Option<u64> {
-        // İsim temizleme: dublaj/altyazı etiketleri, parantez içleri, sezon
-        // belirteçleri ("2. Sezon", "Sezon 2", "Season II"), bölüm no ve saf
-        // sayılar atılır — Anilist aramasında ana seri adı kalmalı.
         let mut base = anime_name
             .replace("(TV)", " ")
             .replace("Türkçe", " ")
@@ -1414,8 +1286,6 @@ impl Client {
         if !cleaned.is_empty() {
             cands.push(cleaned.clone());
         }
-        // Fallback: tam ad bulunamazsa ilk iki kelimeyi dene ("Non Non Biyori
-        // Nonstop" gibi alt serilerde tam ad bazen tutmaz).
         let words: Vec<&str> = cleaned.split_whitespace().collect();
         if words.len() > 2 {
             let short = words[..2].join(" ");
@@ -1446,7 +1316,6 @@ impl Client {
         None
     }
 
-    /// AniSkip API'den (MAL ID + Bölüm No) intro (OP) ve outro (ED) damgalarını dinamik çözer
     pub fn fetch_aniskip_timestamps(&self, anime_name: &str, ep_num: u64) -> AniSkipTimes {
         let Some(mal_id) = self.resolve_mal_id(anime_name) else {
             return AniSkipTimes::default();
@@ -1454,11 +1323,6 @@ impl Client {
 
         let key = format!("aniskip_v4:{mal_id}:{ep_num}");
         let d = match self.cache_get(&key, 6 * 3600, |http| {
-            // AniSkip arada HTTP 500 döndürebiliyor (ör. NNB ep8). ESKİ HATA:
-            // 500 gövdesi geçerli JSON olduğu için başarı sayılıp 7 GÜN
-            // önbelleğe alınıyordu -> bölüm bir hafta "bulunamıyor" kalıyordu.
-            // Artık: status kontrolü (5xx -> Err -> ÖNBELLEĞE GİRMEZ) + geçici
-            // hatada tek seferlik yeniden deneme.
             let fetch = |http: &reqwest::blocking::Client| -> Result<serde_json::Value, String> {
                 http.get(format!("https://api.aniskip.com/v2/skip-times/{mal_id}/{ep_num}?types=op&types=ed&episodeLength=0"))
                     .timeout(std::time::Duration::from_secs(8))
@@ -1469,7 +1333,6 @@ impl Client {
                     .json()
                     .map_err(|e| e.to_string())
             };
-            // Yavaş ağlarda ilk deneme timeout'a düşebiliyor: toplam 3 deneme.
             match fetch(http) {
                 Ok(v) => Ok(v),
                 Err(first) => {
@@ -1519,7 +1382,6 @@ impl Client {
             .unwrap()
             .as_secs();
 
-        // 1) Bellek önbelleği
         {
             let b = self.bytes.lock().unwrap();
             if let Some((t, v)) = b.get(url) {
@@ -1529,7 +1391,6 @@ impl Client {
             }
         }
 
-        // 2) Disk önbelleği
         let disk_path = self.img_cache_path(url);
         if let Ok(meta) = std::fs::metadata(&disk_path) {
             let disk_ts = meta.modified().ok()
@@ -1538,7 +1399,6 @@ impl Client {
                 .unwrap_or(0);
             if now.saturating_sub(disk_ts) < IMG_TTL_SECS {
                 if let Ok(data) = std::fs::read(&disk_path) {
-                    // Diskten belleğe yükle + tavana göre eski girişleri at
                     let mut m = self.bytes.lock().unwrap();
                     m.insert(url.to_string(), (disk_ts, data.clone()));
                     trim_img_cache(&mut m);
@@ -1547,7 +1407,6 @@ impl Client {
             }
         }
 
-        // 3) Ağ isteği
         let t0 = std::time::Instant::now();
         let out = self.http.get(url)
             .timeout(std::time::Duration::from_secs(12))
@@ -1562,10 +1421,6 @@ impl Client {
         out
     }
 
-    /// Uygulama açılışında çağrılır: ana sayfa sunucusu (animecix.tv) ve kapak sunucusu
-    /// (image.tmdb.org) için TLS/DNS/HTTP2 bağlantısını önceden kurar, böylece ilk gerçek
-    /// istek handshake maliyetini ödemez. Sonuçlar yok sayılır; çevrimdışıysa güvenle hata
-    /// verir ve ASLA panic etmez.
     pub fn warmup(&self) {
         let _ = self.http.get(BASE)
             .header("Accept", "application/json")
@@ -1576,12 +1431,9 @@ impl Client {
             .send();
     }
 
-    // ---- durum ----
 
     pub fn state_path() -> PathBuf {
         let mut p = if let Ok(d) = std::env::var("ANIMECIX_STATE_DIR") {
-            // Test izolasyonu: aynı makinede birden fazla test binary'si (probe, main)
-            // ayrı process'ler olarak aynı state.json'a yarışmasın diye env ile geçersiz kılınabilir.
             PathBuf::from(d)
         } else {
             dirs_cache_or_home()
@@ -1590,12 +1442,6 @@ impl Client {
         p
     }
 
-    /// state.json eski sürümle ya da bozuk/yanlış tipte alanlarla yazılmış
-    /// olabilir (örn. maraton öğesinin `title` alanı bir nesne yerine düz bir
-    /// id sayısıydı). Bütün dosyayı doğrudan `State`'e deserialize edersek TEK
-    /// bir bozuk alan tüm state'i çöpe çıkarır (unwrap_or_default → boş State).
-    /// Bu yüzden önce `Value` olarak okuyup bölüm bölüm, alan alan toleranslı
-    /// migrate ediyoruz; bir kayıt bozuksa sadece o atlanır, geri kalanı kalır.
     pub fn load_state(&self) -> State {
         let p = Self::state_path();
         let mut st = std::fs::read_to_string(&p)
@@ -1603,8 +1449,6 @@ impl Client {
             .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
             .map(|v| Self::migrate_state(&v))
             .unwrap_or_default();
-        // Eski/eksik kayıtlı başlıkları önbelleklenmiş liste verisiyle tamamla.
-        // (isim/tür alanları boşsa maraton, favoriler ve geçmiş sayfaları isimsiz görünür)
         let mut changed = false;
         for m in &mut st.marathon {
             if self.hydrate_title(&mut m.title) {
@@ -1621,18 +1465,12 @@ impl Client {
                 changed = true;
             }
         }
-        // Doldurulan başlık bilgisini diske yaz (bir daha ağ/önbellek araması gerekmesin)
         if changed {
             self.save_state(&st);
         }
         st
     }
 
-    /// Bir JSON değerinden `Title` üretir. Eski şemaları da kapsar:
-    /// - nesne: `id`/`title_id`, `name`/`title`, `title_type`/`type`,
-    ///   `poster`/`image`, `year`, `season_count`/`seasons`, `description`
-    /// - düz sayı: sadece id (hidratasyon ile tamamlanır)
-    /// - düz string: sadece isim
     fn val_to_title(v: &serde_json::Value) -> Option<Title> {
         match v {
             serde_json::Value::Object(_) => {
@@ -1690,8 +1528,6 @@ impl Client {
         }
     }
 
-    /// state.json'ı bölüm bölüm toleranslı şekilde `State`'e dönüştürür.
-    /// Tek bir bozuk kayıt tüm state'i çökertmez; sadece o kayıt atlanır.
     fn migrate_state(v: &serde_json::Value) -> State {
         let obj = match v.as_object() {
             Some(o) => o,
@@ -1776,9 +1612,6 @@ impl Client {
         st
     }
 
-    /// Başlık bilgisi eksikse (isim/tür/yıl/sezon) önce önbelleklenmiş ana liste
-    /// verisinden, yoksa ağ üzerinden arama ile tamamlar. Maraton/favoriler/
-    /// geçmiş sayfalarının isimsiz görünmesini engeller. Değişiklik yaptıysa true döner.
     fn hydrate_title(&self, t: &mut Title) -> bool {
         let complete = !t.name.is_empty()
             && t.title_type.is_some()
@@ -1810,7 +1643,6 @@ impl Client {
             }
             return changed;
         }
-        // Önbellekte yoksa ağ üzerinden id ile ara
         if t.name.is_empty() {
             if let Ok(results) = self.search(&t.id.to_string()) {
                 if let Some(src) = results.into_iter().find(|x| x.id == t.id) {
@@ -1837,8 +1669,6 @@ impl Client {
         changed
     }
 
-    /// Önbelleklenmiş (bellek + disk) ana liste verisinden id'ye göre başlığı bulur.
-    /// Ağ isteği yapmaz; sadece mevcut önbelleği kullanır.
     fn cached_title_by_id(&self, id: u64) -> Option<Title> {
         let value = {
             let mem = self.cache.lock().unwrap();
@@ -1914,7 +1744,6 @@ impl Client {
         let _ = name; // (state dosyasındaki isim eski sistemle uyumluluk için)
     }
 
-    /// bölüm izlendi olarak kayıtlı mı
     pub fn is_watched(&self, title_id: u64, season: u64, episode: u64) -> bool {
         let st = self.load_state();
         st.watched
@@ -1923,8 +1752,6 @@ impl Client {
             .unwrap_or(false)
     }
 
-    /// Yalnızca "şu an izlenen" (continue watching) durumunu günceller; izlendi listesine
-    /// EKLEMEZ. Böylece bir bölüme geçildiğinde izlenmeden "tamamlandı" işaretlenmez.
     pub fn set_current(&self, w: &Watched) {
         let mut st = self.load_state();
         st.current = Some(Watched {
@@ -1935,13 +1762,10 @@ impl Client {
         self.save_state(&st);
     }
 
-    /// Bir bölümün "izlendi" sayılması için yeterince izlenip izlenmediğini döner.
-    /// İlerleme sürenin %90'ına ulaştıysa tamamlandı kabul edilir.
     pub fn played_enough(pos: f64, dur: f64) -> bool {
         dur > 0.0 && (pos / dur) >= 0.9
     }
 
-    /// bölümü izlendi listesinden kaldır
     pub fn remove_watched(&self, title_id: u64, season: u64, episode: u64) {
         let mut st = self.load_state();
         let key = title_id.to_string();
@@ -1963,7 +1787,6 @@ impl Client {
         self.load_state().saved.iter().any(|t| t.id == id)
     }
 
-    /// dönen değer: yeni durum (true = kaydedildi)
     pub fn toggle_saved(&self, t: &Title) -> bool {
         let mut st = self.load_state();
         if let Some(pos) = st.saved.iter().position(|x| x.id == t.id) {
@@ -2029,7 +1852,6 @@ impl Client {
         self.save_state(&st);
     }
 
-    /// Maratondaki bir öğeyi verilen hedef indekse taşır (sürükle-sırala için).
     pub fn reorder_marathon(&self, id: u64, new_index: usize) {
         let mut st = self.load_state();
         if let Some(pos) = st.marathon.iter().position(|m| m.title.id == id) {
@@ -2043,12 +1865,10 @@ impl Client {
         }
     }
 
-    /// Bir başlık için toplam bölüm sayısını döndürür (ağ gerektirir, cache'li).
     pub fn episode_count(&self, t: &Title) -> Option<u64> {
         self.episodes(t).ok().map(|e| e.len() as u64)
     }
 
-    /// Bir başlık için izlenmiş (ilerleme kaydı olan) farklı bölüm sayısını döndürür.
     pub fn watched_episode_count(&self, tid: u64) -> u64 {
         let st = self.load_state();
         let prefix = format!("{tid}:");
@@ -2064,8 +1884,6 @@ impl Client {
         seen.len() as u64
     }
 
-    /// Maraton kartındaki progress bar için 0..1 arası ilerleme oranı.
-    /// Film: izlenen/total süre. Dizi: izlenen/total bölüm sayısı.
     pub fn title_progress_frac(&self, t: &Title) -> f64 {
         if t.title_type.as_deref() == Some("movie") {
             if let Some((pos, dur)) = self.get_progress(t.id, 1, 1) {
@@ -2089,7 +1907,6 @@ impl Client {
         self.save_state(&st);
     }
 
-    /// Seçilen geçmiş ögelerini sil (title id listesine göre)
     pub fn remove_history_items(&self, title_ids: &[u64]) {
         let mut st = self.load_state();
         st.history.retain(|h| !title_ids.contains(&h.title.id));
@@ -2116,7 +1933,6 @@ impl Client {
         self.save_state(&st);
     }
 
-    // ---- ayarlar ----
 
     pub fn settings_path() -> PathBuf {
         let mut p = dirs_cache_or_home();
@@ -2124,8 +1940,6 @@ impl Client {
         p
     }
 
-    /// URL'den kaynak ailesi ipucunu çıkarır (tercih hafızası için).
-    /// Bilinmeyen hostlar boş string döner.
     pub fn source_host_hint(url: &str) -> &'static str {
         if url.contains("tau-video") { "tau-video" }
         else if url.contains("sibnet.ru") { "sibnet.ru" }
@@ -2138,13 +1952,11 @@ impl Client {
         else { "" }
     }
 
-    /// Bu dizide en son başarıyla çalışan kaynak hostu (varsa).
     pub fn get_preferred_host(&self, title_id: u64) -> Option<String> {
         let st = self.load_state();
         st.preferred_source.get(&title_id.to_string()).cloned()
     }
 
-    /// Başarıyla çalışan kaynağı hatırlar (sonraki oynatmalarda önce denenir).
     pub fn set_preferred_host(&self, title_id: u64, host_hint: &str) {
         if host_hint.is_empty() { return; }
         let mut st = self.load_state();
@@ -2169,25 +1981,20 @@ impl Client {
         let _ = std::fs::write(&p, serde_json::to_string_pretty(s).unwrap_or_default());
     }
 
-    /// Tüm uygulama verilerini (geçmiş, kapak görselleri, önbellek, ayarlar, geçici dosyalar) tamamen sil
     pub fn wipe_all_data(&self) {
-        // 1) In-memory önbellekleri temizle
         if let Ok(mut c) = self.cache.lock() { c.clear(); }
         if let Ok(mut b) = self.bytes.lock() { b.clear(); }
         if let Ok(mut r) = self.resolved.lock() { r.clear(); }
 
-        // 2) state.json ve settings.json'ı varsayılana sıfırla
         let st = State::default();
         self.save_state(&st);
         self.save_settings(&Settings::default());
 
-        // 3) Disk üzerindeki kapak resmi ve API önbellek klasörünü (~/.cache/animecix) sil
         let mut cache_dir = dirs_cache_or_home();
         cache_dir.push(".cache/animecix");
         let _ = std::fs::remove_dir_all(&cache_dir);
         let _ = std::fs::create_dir_all(&cache_dir);
 
-        // 4) /tmp/animecix-* geçici dosyalarını temizle
         if let Ok(entries) = std::fs::read_dir("/tmp") {
             for entry in entries.flatten() {
                 let name = entry.file_name();
@@ -2238,7 +2045,6 @@ impl Client {
         self.save_state(&st);
     }
 
-    /// B\u00f6l\u00fcm ilerleme konumunu kaydet (pos ve dur saniye cinsinden)
     pub fn save_progress(&self, tid: u64, season: u64, episode: u64, pos: f64, dur: f64) {
         let key = format!("{tid}:{season}:{episode}");
         let mut st = self.load_state();
@@ -2246,7 +2052,6 @@ impl Client {
         self.save_state(&st);
     }
 
-    /// Kaydedilmi\u015f ilerleme konumunu d\u00f6nd\u00fcr: (pos_sn, dur_sn) ya da None
     pub fn get_progress(&self, tid: u64, season: u64, episode: u64) -> Option<(f64, f64)> {
         let key = format!("{tid}:{season}:{episode}");
         self.load_state().progress.get(&key).copied()
@@ -2261,12 +2066,8 @@ fn dirs_cache_or_home() -> PathBuf {
 mod tests {
     use super::*;
 
-    // state.json'a yazan marathon testleri paralel çalışınca birbirinin yazısını eziyor;
-    // onları serialize etmek için test-only kilit (üretim kodunu etkilemez).
     static STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    // Her test process'i (probe, main ayrı binary'ler) kendi state.json'ını kullanır,
-    // böylece aynı makinede paralel koşan ikili dosyalar birbirine çakışmaz.
     fn use_isolated_state() {
         use std::sync::Once;
         static ONCE: Once = Once::new();
@@ -2292,7 +2093,6 @@ mod tests {
 
     #[test]
     fn warmup_is_safe_offline() {
-        // warmup çevrimdışı/hatalı ağda panic etmemeli (bağlantı ısıtma güvenli olmalı)
         let c = Client::new();
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             c.warmup();
@@ -2302,33 +2102,26 @@ mod tests {
 
     #[test]
     fn cache_get_caches_and_reuses() {
-        // prefetch'in dayandığı önbellek sözleşmesi: ilk çağrı loader'ı çalıştırır,
-        // ikinci çağrı bellek önbelleğinden döner (loader tekrar ÇAĞRILMAZ).
         let c = Client::new();
         static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let key = format!("test:cache_reuse:{}:{}", std::process::id(), n);
         let v1 = c.cache_get(&key, 60, |_h| Ok(serde_json::json!({"n": n}))).unwrap();
-        // ikinci çağrıda loader panic ederse bu bir cache miss'tir (prefetch işe yaramadı demek)
         let v2 = c.cache_get(&key, 60, |_h| panic!("loader tekrar çağrılmamalı (cache miss)")).unwrap();
         assert_eq!(v1, v2);
     }
 
     #[test]
     fn upscale_mpv_args_modes() {
-        // off -> ek arg yok
         assert!(super::upscale_mpv_args("off", None).is_empty());
         assert!(super::upscale_mpv_args("kapali", None).is_empty());
-        // sharp -> ewa_lanczossharp (dsharpen bu mpv sürümünde yok, çıkarıldı)
         let sharp = super::upscale_mpv_args("sharp", None);
         assert!(sharp.iter().any(|a| a == "--scale=ewa_lanczossharp"));
         assert!(sharp.iter().any(|a| a == "--cscale=ewa_lanczossharp"));
         assert!(!sharp.iter().any(|a| a.contains("dsharpen")));
-        // anime4k modları: shader yoksa arg yok (özellik pas geçilir)
         assert!(super::upscale_mpv_args("anime4k_light", None).is_empty());
         assert!(super::upscale_mpv_args("anime4k_normal", None).is_empty());
         assert!(super::upscale_mpv_args("anime4k_ultra", None).is_empty());
-        // shader varsa glsl arg
         let ak = super::upscale_mpv_args("anime4k_ultra", Some("/p/Anime4K.glsl"));
         assert_eq!(ak, vec!["--glsl-shaders=/p/Anime4K.glsl".to_string()]);
     }
@@ -2376,7 +2169,6 @@ mod tests {
     fn enrich_title_short_circuits_when_populated() {
         let c = Client::new();
         let mut t = sample("anime", Some(2021), Some(2));
-        // Zaten genre dolu -> ağ sorgusu yapmadan aynen dönmeli
         t.genres = Some(vec!["Dram".to_string()]);
         let e = c.enrich_title(&t);
         assert_eq!(e.id, t.id);
@@ -2397,7 +2189,6 @@ mod tests {
 
     #[test]
     fn meta_line_matches_between_marathon_and_favs() {
-        // Aynı başlık her iki yerde aynı alt satırı üretmeli
         let a = sample("anime", Some(2022), Some(3));
         let b = sample("anime", Some(2022), Some(3));
         assert_eq!(a.meta_line(), b.meta_line());
@@ -2456,8 +2247,6 @@ mod tests {
     #[test]
     #[test]
     fn settings_source_patience_roundtrips() {
-        // Ayarlar diske yazılıp okunduğunda kaynak açılış sabrı korunmalı
-        // (kullanıcı 40sn ayarladıysa yeniden açılışta 40sn kalmalı).
         let mut s = Settings::default();
         assert_eq!(s.source_patience_secs, 20);
         s.source_patience_secs = 40;
@@ -2468,9 +2257,6 @@ mod tests {
     }
 
     fn migrate_state_recovers_bare_id_and_alias_fields() {
-        // Eski şema: maraton öğesinin `title` alanı düz bir id sayısı, ve favoriler
-        // `title` anahtarıyla isim tutuyor olabilir. migrate_state bunları çökertmeden
-        // (boş State döndürmeden) kurtarmalı.
         let value: serde_json::Value = serde_json::json!({
             "marathon": [
                 { "title": 777, "completed": false, "added_at": 1 }
@@ -2492,7 +2278,6 @@ mod tests {
         use_isolated_state();
         let _g = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let c = Client::new();
-        // Sahte "lists" disk önbelleği yaz (ağ gerektirmez, deterministik)
         let mut dir = dirs_cache_or_home();
         dir.push(".cache/animecix/api");
         std::fs::create_dir_all(&dir).ok();
@@ -2504,7 +2289,6 @@ mod tests {
         let json = r#"{"lists":[{"name":"Popüler","items":[{"id":777,"name":"Hidratasyon Testi","title_type":"anime","year":2021,"season_count":2,"poster":null}]}]}"#;
         std::fs::write(&lists_path, format!("{ts}\n{json}")).ok();
 
-        // Boş isimli maraton öğesi kaydet
         let mut st = c.load_state();
         st.marathon.push(MarathonItem {
             title: Title {
@@ -2527,7 +2311,6 @@ mod tests {
         assert_eq!(m.title.name, "Hidratasyon Testi", "isim önbellekten doldurulmalı");
         assert_eq!(m.title.title_type.as_deref(), Some("anime"));
 
-        // temizlik
         let mut st2 = c.load_state();
         st2.marathon.retain(|x| x.title.id != 777);
         c.save_state(&st2);
@@ -2536,8 +2319,6 @@ mod tests {
 
     #[test]
     fn next_episode_not_marked_watched_before_playing() {
-        // Sonraki bölüme geçiş (set_current) izlenmeden "tamamlandı" işaretlememeli;
-        // izlendi işareti yalnızca izlenme eşiği aşılınca konmalı.
         use_isolated_state();
         let _g = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let c = Client::new();
@@ -2545,28 +2326,22 @@ mod tests {
         let w1 = Watched { title_id: tid, episode: 1, season: 0 };
         let w2 = Watched { title_id: tid, episode: 2, season: 0 };
 
-        // Açılışta yalnızca "şu an izlenen" güncellenir
         c.set_current(&w1);
         assert!(!c.is_watched(tid, 0, 1), "açılan bölüm henüz izlenmedi sayılmamalı");
 
-        // İzlenme eşiği politikası
         assert!(Client::played_enough(95.0, 100.0), ">=%90 izlendi sayılmalı");
         assert!(!Client::played_enough(45.0, 100.0), "<%90 izlenmedi sayılmalı");
         assert!(!Client::played_enough(0.0, 0.0), "süresiz içerik izlenmiş sayılmaz");
 
-        // Eşik aşılınca işaretlenir
         c.save_watched(&w1, "");
         assert!(c.is_watched(tid, 0, 1), "eşik aşılınca izlendi sayılmalı");
 
-        // Sonraki bölüme geçiş izlenmeden tamamlamamalı
         c.set_current(&w2);
         assert!(!c.is_watched(tid, 0, 2), "sonraki bölüm geçişte izlenmeden tamamlanmamalı");
 
-        // Sonraki bölüm de izlenince işaretlenir
         c.save_watched(&w2, "");
         assert!(c.is_watched(tid, 0, 2), "sonraki bölüm izlenince işaretlenmeli");
 
-        // temizlik: gerçek state dosyasını kirletmeyelim
         c.remove_watched(tid, 0, 1);
         c.remove_watched(tid, 0, 2);
         let mut st = c.load_state();
@@ -2576,8 +2351,6 @@ mod tests {
 
     #[test]
     fn resolve_embed_drops_unknown_hosts() {
-        // v2.7.6 sözleşmesi: bilinmeyen hostlar (ok.ru, gdrive...) pasif/ölü
-        // sayılıp ELENMELİ; ham embed URL aday listesine girmemeli.
         let c = Client::new();
         assert!(c.resolve_embed("https://odnoklassniki.ru/videoembed/2099802475096").is_err(), "ok.ru elenmeli");
         assert!(c.resolve_embed("https://drive.google.com/file/d/x/preview").is_err(), "gdrive elenmeli");
@@ -2585,10 +2358,7 @@ mod tests {
 
     #[test]
     #[ignore] // canlı ağ testi: bazı ağlarda hedef hostlar engelli olabilir.
-    // Elle çalıştırmak: cargo test --bin animecix -- --ignored
     fn resolve_all_live_returns_playable_sibnet() {
-        // UÇTAN UCA (canlı ağ): "bölümler hiç açılmıyor" regresyon koruması.
-        // Gerçek API -> gerçek sibnet çözümlemesi en az bir mp4 üretmeli.
         let _g = STATE_LOCK.lock().unwrap();
         let c = Client::new();
         let mut urls = None;
@@ -2607,25 +2377,17 @@ mod tests {
 
     #[test]
     fn aniskip_live_finds_non_non_biyori_ep9() {
-        // KULLANICI RAPORU (v2.7.10): AniSkip "artık bulamıyor". API tarafında
-        // veri VAR (op 140.6-228.5); hata 500 gövdelerinin 7 gün
-        // önbelleklenmesiydi. Bu canlı test zincirin tamamını doğrular:
-        // isim -> MAL ID -> skip-times.
         let c = Client::new();
         let t = c.fetch_aniskip_timestamps("Non Non Biyori", 9);
         eprintln!("[live] NNB E9 aniskip: {t:?}");
         assert!(t.op_end.is_some(), "ep9 intro (op) zamanları bulunmalı; gelen: {t:?}");
         assert!(t.ed_start.is_some(), "ep9 outro (ed) zamanları bulunmalı; gelen: {t:?}");
-        // Makul aralık kontrolü: op videonun ilk 6 dakikası içinde bitmeli
         assert!(t.op_end.unwrap() < 360.0, "op_end makul olmalı");
     }
 
     #[test]
     #[ignore]
     fn resolve_top_live_fast_tier() {
-        // HİBRİT hızlı kademe (v2.8.4+): yalnızca ilk 3 aday çözülür; süre
-        // ölçülür ve sonuç boş olmamalı (ağ değişkenliği için üst sınır 8 sn).
-        // Canlı ağ değişkendir: seri çalış + 3 deneme hakkı; süre yalnızca log.
         let _g = STATE_LOCK.lock().unwrap();
         let c = Client::new();
         let mut pairs: Option<Vec<(String, String)>> = None;
@@ -2645,8 +2407,6 @@ mod tests {
     #[test]
     #[ignore]
     fn resolve_top_preferred_host_comes_first() {
-        // v2.8.5: kullanıcı tarafında ÇALIŞAN kaynak bir sonraki oynatmada
-        // kademenin başına alınmalı (NNB E11 vakası: tau ölü, sibnet canlıydı).
         let _g = STATE_LOCK.lock().unwrap();
         let c = Client::new();
         let mut pairs: Option<Vec<(String, String)>> = None;

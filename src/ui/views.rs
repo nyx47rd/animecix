@@ -6,8 +6,6 @@ use crate::api::{Client, HistoryEntry, Settings, Title};
 use crate::ui::episodes_view;
 use gio::prelude::*;
 
-/// Bilgi/hata penceresi: tek "Tamam" butonlu basit dialog. `parent` varsa
-/// üzerine konumlanır (GtkWindow referansı taşınabilir olduğu için & ile alınır).
 pub(crate) fn show_info_dialog(parent: Option<&gtk::Window>, heading: &str, body: &str) {
     let dialog = adw::MessageDialog::builder()
         .heading(heading)
@@ -22,7 +20,6 @@ pub(crate) fn show_info_dialog(parent: Option<&gtk::Window>, heading: &str, body
     dialog.present();
 }
 
-/// İzleme Maratonu (To-Do List) Sayfası
 pub struct MarathonView;
 
 impl MarathonView {
@@ -56,7 +53,6 @@ impl MarathonView {
         let completed_count = marathon_items.iter().filter(|m| m.completed).count();
         let percent = if total_count > 0 { (completed_count * 100) / total_count } else { 0 };
 
-        // --- İlerleme ve Özet Kartı ---
         let summary_card = gtk::Box::new(gtk::Orientation::Vertical, 10);
         summary_card.add_css_class("marathon-summary-card");
 
@@ -101,7 +97,6 @@ impl MarathonView {
 
         root.append(&summary_card);
 
-        // --- Liste ---
         let list_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
 
         let on_item_click_rc = Rc::new(on_item_click);
@@ -114,7 +109,6 @@ impl MarathonView {
             let card_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
             card_box.add_css_class("marathon-item-card");
 
-            // Sıra numarası
             let num = gtk::Label::new(Some(&format!("{}", idx + 1)));
             num.add_css_class("marathon-index");
             num.set_xalign(0.5);
@@ -122,11 +116,8 @@ impl MarathonView {
             num.set_valign(gtk::Align::Center);
             card_box.append(&num);
 
-            // --- Sürükle-bırak ile sıralama (kartın tamamı sürüklenebilir) ---
             let drag = gtk::DragSource::new();
             drag.set_actions(gtk::gdk::DragAction::MOVE);
-            // Sürükleme ikonu: kartın kendisi, hotspot kartın MERKEZİNDE.
-            // Böylece kart nereden tutulursa tutulsun imleç kartın ortasında kalır.
             let card_for_icon = card_box.clone();
             let src_id = item.title.id;
             drag.connect_prepare(move |drag, _, _| {
@@ -137,7 +128,6 @@ impl MarathonView {
                     &glib::Value::from(src_id.to_string()),
                 ))
             });
-            // Sürüklerken kaynak kartın opaklığını düşür (yerinde görsel ipucu)
             let card_dim = card_box.clone();
             drag.connect_drag_begin(move |_, _| {
                 card_dim.set_opacity(0.35);
@@ -163,7 +153,6 @@ impl MarathonView {
             });
             card_box.add_controller(drop);
 
-            // Checkbox
             let chk = gtk::CheckButton::new();
             chk.set_active(item.completed);
             chk.set_valign(gtk::Align::Center);
@@ -172,7 +161,6 @@ impl MarathonView {
             let on_t_c = on_toggle_rc.clone();
             chk.connect_toggled(move |_| { on_t_c(tid); });
 
-            // Poster
             let pic = gtk::Picture::new();
             pic.set_width_request(48);
             pic.set_height_request(72);
@@ -184,7 +172,6 @@ impl MarathonView {
             pic.set_valign(gtk::Align::Center);
             cover_loader_rc(item.title.poster.as_deref(), &pic, 48, 72);
 
-            // Metin
             let info_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
             info_box.set_valign(gtk::Align::Center);
             info_box.set_hexpand(true);
@@ -203,7 +190,6 @@ impl MarathonView {
             info_box.append(&title_row);
             episodes_view::append_title_submeta(&info_box, &item.title);
 
-            // İlerleme çubuğu
             let prog = gtk::ProgressBar::new();
             prog.add_css_class("episode-progress");
             prog.set_margin_top(4);
@@ -218,7 +204,6 @@ impl MarathonView {
                 Err(_)   => glib::ControlFlow::Continue,
             });
 
-            // Butonlar
             let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             actions.set_valign(gtk::Align::Center);
             let play_btn = gtk::Button::with_label("▶ İzle");
@@ -249,7 +234,6 @@ impl MarathonView {
     }
 }
 
-/// Geçmiş Sayfası (Checkbox ile seçmeli ve toplu silme aksiyonlu)
 pub struct HistoryView;
 
 impl HistoryView {
@@ -277,7 +261,6 @@ impl HistoryView {
             return root;
         }
 
-        // --- Aksiyon Çubuğu ---
         let action_bar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         action_bar.set_margin_bottom(6);
 
@@ -305,7 +288,6 @@ impl HistoryView {
 
         root.append(&action_bar);
 
-        // --- Liste ---
         let list_box = gtk::Box::new(gtk::Orientation::Vertical, 5);
         list_box.set_vexpand(false);
 
@@ -423,7 +405,6 @@ impl HistoryView {
     }
 }
 
-/// Ayarlar Sayfası
 pub struct SettingsView;
 
 impl SettingsView {
@@ -490,7 +471,6 @@ impl SettingsView {
         player_group.add(&aniskip_row);
         root.append(&player_group);
 
-        // Performans grubu: hafif mod (cairo renderer, düşük RAM)
         let perf_group = adw::PreferencesGroup::new();
         perf_group.set_title("Performans");
 
@@ -500,7 +480,6 @@ impl SettingsView {
         light_row.set_active(settings.light_mode);
         perf_group.add(&light_row);
 
-        // Kaynak açılış sabrı (yavaş internet için): ölü kaynakta beklenen süre
         let patience_row = adw::ActionRow::new();
         patience_row.set_title("Kaynak Açılış Sabrı");
         patience_row.set_subtitle("Yavaş internet için artırın. Medya hiç açılmazsa ölü kaynakta bu kadar saniye (20-120) beklenir, sonra sıradakine geçilir.");
@@ -512,12 +491,9 @@ impl SettingsView {
         perf_group.add(&patience_row);
         root.append(&perf_group);
 
-        // VPN Proxy grubu (isteğe bağlı): yerel sing-box/Proton proxy yönetimi.
-        // Port ayaktaysa mpv trafiği otomatik oradan çıkar; kapalıysa hiçbir şey değişmez.
         let vpn_group = adw::PreferencesGroup::new();
         vpn_group.set_title("VPN Proxy (İsteğe Bağlı)");
 
-        // Başlık yanında bilgi butonu: hover'da kısa ipucu, tıklamada detaylı açıklama.
         let info_btn = gtk::Button::from_icon_name("dialog-information");
         info_btn.add_css_class("flat");
         info_btn.add_css_class("circular");
@@ -575,11 +551,8 @@ yerel bir proxy (sing-box + ProtonVPN WireGuard) çalıştırabilirsin.\n\n\
         vpn_btn_row.add_suffix(&btn_box);
         vpn_group.add(&vpn_btn_row);
 
-        // Durum etiketini güncellemek için ortak kapanış
         let refresh_status_rc = std::rc::Rc::new(refresh_vpn_status);
 
-        // Durumu canlı tut: proxy kendi kendine ölse de / durduktan hemen sonra
-        // UI doğruyu yansısın diye ~2 sn'de bir tazele.
         let live_rs = refresh_status_rc.clone();
         glib::timeout_add_seconds_local(2, move || {
             live_rs();
@@ -597,7 +570,6 @@ yerel bir proxy (sing-box + ProtonVPN WireGuard) çalıştırabilirsin.\n\n\
                         rs();
                     }
                     Some((bin, cfg)) => {
-                        // Ağ işini (blocking) UI dışına al
                         let res = {
                             let bin = bin.clone();
                             let cfg = cfg.clone();
@@ -625,8 +597,6 @@ yerel bir proxy (sing-box + ProtonVPN WireGuard) çalıştırabilirsin.\n\n\
             let parent = btn.root().and_downcast::<gtk::Window>();
             let rs2 = rs2.clone();
             glib::spawn_future_local(async move {
-                // stop() port ölene kadar bekleyebilir; UI'yi dondurmamak için
-                // blocking çağrıyı ayrı iş parçacığına al.
                 let killed = gio::spawn_blocking(|| crate::vpn::stop()).await;
                 match killed {
                     Ok(true) => {}
@@ -637,7 +607,6 @@ yerel bir proxy (sing-box + ProtonVPN WireGuard) çalıştırabilirsin.\n\n\
             });
         });
 
-        // Görüntü iyileştirme (upscale)
         let img_group = adw::PreferencesGroup::new();
         img_group.set_title("Görüntü İyileştirme");
         let upscale_row = adw::ComboRow::new();
@@ -660,8 +629,6 @@ yerel bir proxy (sing-box + ProtonVPN WireGuard) çalıştırabilirsin.\n\n\
         });
         img_group.add(&upscale_row);
 
-        // libadwaita 0.6 subtitle etrafında sarılmaz (yalnızca üç nokta ile keser);
-        // uzun açıklamayı ayrı bir wrapping etiketle alt satıra geçiriyoruz.
         let upscale_desc = gtk::Label::new(Some(
             "Yalnızca kaynak çözünürlüğü ekrandan küçükse etki eder. Anime4K: hafif (DTD, iGPU dostu) / normal (CNN orta) / ultra (CNN, en kaliteli).",
         ));
@@ -678,7 +645,6 @@ yerel bir proxy (sing-box + ProtonVPN WireGuard) çalıştırabilirsin.\n\n\
         let update_group = adw::PreferencesGroup::new();
         update_group.set_title("Güncelleme");
 
-        // on_save'i Rc'ye sar (hem kaydet hem "Bir Daha Gösterme" bastırma için kullanılacak)
         let on_save = Rc::new(on_save);
 
         let auto_update_row = adw::SwitchRow::new();

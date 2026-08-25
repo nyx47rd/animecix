@@ -12,14 +12,10 @@ use gtk::prelude::*;
 use std::process::Command;
 
 fn main() {
-    // glibc malloc arena tavanı — tunable'lar process start'ta okunduğu için
-    // env ile geç ayarlamak işe yaramaz; mallopt ile çalışma anında uygulanır.
     #[cfg(target_os = "linux")]
     unsafe {
         libc::mallopt(libc::M_ARENA_MAX, 2);
     }
-    // --goto <sayfa> seçeneğini GTK'ın "bilinmeyen seçenek" hatası vermemesi için
-    // ayıkla; uygulama içinde std::env::args() ile yine okunur.
     let raw_args: Vec<String> = std::env::args().collect();
     let mut filtered: Vec<String> = Vec::new();
     let mut it = raw_args.iter();
@@ -30,17 +26,12 @@ fn main() {
         if a == "--goto" {
             let _ = it.next(); // değeri atla
         } else if a.starts_with("--goto=") {
-            // --goto=deger formu, atla
         } else {
             filtered.push(a.clone());
         }
     }
 
-    // MALLOC_ARENA_MAX: çok thread'li ayırmalarda glibc arena şişmesini sınırlar
-    // (ölçümde ~5 MB kazanç); hafif moddan bağımsız her zaman açık.
     std::env::set_var("MALLOC_ARENA_MAX", "2");
-    // Hafif mod: GSK_RENDERER ilk pencere oluşturulurken okunduğu için env'i
-    // GTK başlamadan set etmeliyiz. Varsayılan KAPALI; Ayarlar'dan açılır.
     let light_mode = api::Client::new().load_settings().light_mode;
     if light_mode {
         std::env::set_var("GSK_RENDERER", "cairo");
@@ -52,8 +43,6 @@ fn main() {
         .build();
 
     app.connect_activate(|app| {
-        // Elle indirilen AppImage, kurulu kısayola taşındıysa true olur;
-        // bu açılışta güncelleme kontrolü bastırılır ve popup gösterilir.
         let mut migrated = false;
         if let Some(display) = gtk::gdk::Display::default() {
             let mut base = std::path::PathBuf::new();
@@ -376,9 +365,6 @@ fn main() {
                 gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
             );
 
-            // Başlatıcı kurulu ise çalışan yeni binary otomatik güncellenir.
-            // Elle indirilen FARKLI bir AppImage açıldıysa kısayol bu dosyaya
-            // taşınır ve kullanıcıya bilgi verilir (migrated=true).
             if check_desktop_entry_installed() {
                 let home = std::env::var("HOME").unwrap_or_default();
                 let desktop_path =
@@ -395,8 +381,6 @@ fn main() {
             }
         }
         let app_inst = App::new(app);
-        // Kapak disk önbelleği süpürmesi: 7 günden eski + tavan üstü dosyaları
-        // arka planda temizler (asla arayüzü bloklamaz, hatalar sessizdir).
         {
             let sweep_client = app_inst.client.clone();
             std::thread::spawn(move || sweep_client.sweep_expired_covers());
@@ -406,9 +390,6 @@ fn main() {
             (s.auto_update, s.notify_uptodate)
         };
         if migrated {
-            // Elle indirilen AppImage sistem kurulumuna taşındı; kullanıcıya
-            // bildir. Bu açılışta güncelleme kontrolü ÇIKMAZ (kullanıcı zaten
-            // istediği sürümü elle çalıştırdı).
             let dlg = adw::MessageDialog::builder()
                 .heading("AnimeciX Güncellendi")
                 .body(format!(
@@ -422,7 +403,7 @@ fn main() {
             dlg.set_response_appearance("ok", adw::ResponseAppearance::Suggested);
             dlg.set_transient_for(Some(&app_inst.window));
             dlg.present();
-        } else if auto_update {
+        } else if auto_update && update::is_appimage() {
             let app_c = app_inst.clone();
             update::check_and_prompt(
                 &app_inst.window,
@@ -487,19 +468,12 @@ pub fn check_desktop_entry_installed() -> bool {
     p1 || p2 || p3 || p4
 }
 
-/// Uygulama her açıldığında: Eğer masaüstü başlatıcısı kurulu ise ve yeni bir AppImage çalıştırılıyorsa
-/// arka planda ~/.local/bin/animecix ve .desktop dosyasını en güncel sürüme günceller.
 pub fn check_and_auto_update_installation() {
     if check_desktop_entry_installed() {
         let _ = install_desktop_entry();
     }
 }
 
-/// Masaüstü kısayolunun `Exec` hedefi:
-/// - AppImage olarak çalışıyorsak: AppImage dosyasının yolu (`APPIMAGE` ortam değişkeni).
-///   Böylece kısayol AppImage runtime'ını çalıştırır, `APPIMAGE` set olur ve otomatik
-///   güncelleme çalışır.
-/// - Kaynak derleme ise: `~/.local/bin/animecix`
 pub fn desktop_exec_target(home: &str) -> String {
     if let Some(ai) = std::env::var("APPIMAGE").ok().filter(|s| !s.trim().is_empty()) {
         ai
@@ -508,8 +482,6 @@ pub fn desktop_exec_target(home: &str) -> String {
     }
 }
 
-/// .desktop dosyasındaki Exec= değerini okur (çevresindeki tırnakları soyar).
-/// Elle indirilen AppImage ile kurulu kısayolun karşılaştırmasında kullanılır.
 pub fn parse_desktop_exec(path: &str) -> Option<String> {
     let content = std::fs::read_to_string(path).ok()?;
     for line in content.lines() {
@@ -530,10 +502,8 @@ pub fn install_desktop_entry() -> Result<(), String> {
 
     let exec_target = desktop_exec_target(&home);
     if std::env::var("APPIMAGE").map(|s| !s.trim().is_empty()).unwrap_or(false) {
-        // Eski entegrasyondan kalmış yanlış ikili kopyasını temizle (artık kullanılmıyor)
         let _ = std::fs::remove_file(format!("{home}/.local/bin/animecix"));
     } else {
-        // Kaynak derleme: ikiliyi ~/.local/bin/animecix'e kopyala
         let bin_dir = format!("{home}/.local/bin");
         let _ = std::fs::create_dir_all(&bin_dir);
         if let Ok(exe_path) = std::env::current_exe() {
@@ -684,7 +654,6 @@ mod tests {
             parse_desktop_exec(path.to_str().unwrap()),
             Some("/opt/x y/AnimeciX.AppImage".to_string())
         );
-        // Exec satırı yoksa None
         let p2 = dir.join("empty.desktop");
         std::fs::write(&p2, "[Desktop Entry]\nName=x\n").unwrap();
         assert_eq!(parse_desktop_exec(p2.to_str().unwrap()), None);

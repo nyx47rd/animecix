@@ -1,15 +1,8 @@
-//! İsteğe bağlı yerel VPN proxy yönetimi (sing-box + WireGuard config).
-//!
-//! Uygulama 127.0.0.1:10808 portunu görünce mpv video trafiğini oradan çıkarır.
-//! Bu modül Ayarlar'daki "VPN Proxy" bölümünün arka planıdır: binary/config
-//! otomatik tespiti, oturumdan kopuk başlatma/durdurma ve durum kontrolü.
 
 use std::path::PathBuf;
 
-/// Uygulamanın dinlediği yerel proxy portu (mixed: socks+http)
 pub const PROXY_PORT: u16 = 10808;
 
-/// Varsayılan sing-box binary yolları (öncelik sırasıyla)
 pub fn bin_candidates(home: &str) -> Vec<PathBuf> {
     vec![
         PathBuf::from(format!("{home}/.local/share/singbox/sing-box")),
@@ -19,7 +12,6 @@ pub fn bin_candidates(home: &str) -> Vec<PathBuf> {
     ]
 }
 
-/// Verilen binary için denenecek config yolları (binary dizini öncelikli)
 pub fn config_candidates(home: &str, bin: &PathBuf) -> Vec<PathBuf> {
     let mut v = Vec::new();
     if let Some(dir) = bin.parent() {
@@ -31,7 +23,6 @@ pub fn config_candidates(home: &str, bin: &PathBuf) -> Vec<PathBuf> {
     v
 }
 
-/// Kurulu sing-box + kullanılabilir config bulur.
 pub fn detect() -> Option<(PathBuf, PathBuf)> {
     let home = std::env::var("HOME").ok()?;
     for bin in bin_candidates(&home) {
@@ -45,13 +36,11 @@ pub fn detect() -> Option<(PathBuf, PathBuf)> {
     None
 }
 
-/// Proxy portu ayakta mı? (mpv trafiğini oraya vereceğimiz kriter de bu)
 pub fn port_alive() -> bool {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], PROXY_PORT));
     std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok()
 }
 
-/// Log dosyası yolu
 pub fn log_path() -> PathBuf {
     let mut p = dirs_data_or_home();
     p.push("singbox.log");
@@ -78,8 +67,6 @@ fn dirs_data_or_home() -> PathBuf {
     }
 }
 
-/// sing-box'ı oturumdan kopuk başlatır (terminal/uygulama kapansa da yaşamaya
-/// devam eder) ve port açılana kadar bekler.
 pub fn start(bin: &PathBuf, cfg: &PathBuf) -> Result<(), String> {
     if port_alive() {
         return Ok(());
@@ -112,44 +99,22 @@ pub fn start(bin: &PathBuf, cfg: &PathBuf) -> Result<(), String> {
     ))
 }
 
-/// Çalışan sing-box süreçlerini sonlandırır. En az biri öldürüldüyse true.
-/// Portun (10808) gerçekten kapanmasını bekler; takılırsa SIGKILL'e yükseltir.
 pub fn stop() -> bool {
-    let ok = std::process::Command::new("pgrep")
-        .arg("-f")
-        .arg("sing-box run")
-        .output()
-        .ok()
-        .map(|o| o.stdout)
-        .unwrap_or_default();
-    let mut pids = Vec::new();
-    for line in String::from_utf8_lossy(&ok).lines() {
-        if let Ok(pid) = line.trim().parse::<i32>() {
-            pids.push(pid);
-        }
-    }
+    let pids = find_singbox_pids();
     if pids.is_empty() {
         return false;
     }
     for pid in &pids {
-        let _ = std::process::Command::new("kill")
-            .arg("-TERM")
-            .arg(pid.to_string())
-            .status();
+        signal_pid(*pid, libc::SIGTERM);
     }
-    // Yumuşak kapanışın portu serbest bırakmasını bekle
     for _ in 0..16 {
         if !port_alive() {
             return true;
         }
         std::thread::sleep(std::time::Duration::from_millis(125));
     }
-    // Hâlâ yaşıyorsa sert sonlandır
     for pid in &pids {
-        let _ = std::process::Command::new("kill")
-            .arg("-KILL")
-            .arg(pid.to_string())
-            .status();
+        signal_pid(*pid, libc::SIGKILL);
     }
     for _ in 0..16 {
         if !port_alive() {
@@ -160,7 +125,40 @@ pub fn stop() -> bool {
     true
 }
 
-/// Kullanıcıya gösterilecek adım adım kurulum metni (Türkçe)
+fn signal_pid(pid: i32, sig: i32) {
+    unsafe {
+        libc::kill(pid, sig);
+    }
+}
+
+pub fn find_singbox_pids() -> Vec<i32> {
+    let mut pids = Vec::new();
+    let me = std::process::id() as i32;
+    let dir = match std::fs::read_dir("/proc") {
+        Ok(d) => d,
+        Err(_) => return pids,
+    };
+    for entry in dir.flatten() {
+        let name = entry.file_name();
+        let pid: i32 = match name.to_string_lossy().parse() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if pid == me {
+            continue;
+        }
+        let raw = match std::fs::read(format!("/proc/{pid}/cmdline")) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let joined = String::from_utf8_lossy(&raw).replace('\0', " ");
+        if joined.contains("sing-box run") {
+            pids.push(pid);
+        }
+    }
+    pids
+}
+
 pub fn setup_instructions() -> String {
     let home = std::env::var("HOME").unwrap_or_else(|_| "~".into());
     let dir = format!("{home}/.local/share/singbox");
@@ -180,12 +178,28 @@ Not: Uygulama config'i binary'nin yanında, ~/.local/share/singbox/,\n~/vpn-conf
 }
 
 fn chrono_stamp() -> String {
-    std::process::Command::new("date")
-        .arg("+%Y-%m-%d %H:%M:%S")
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default()
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let (h, mi, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+    let (y, m, d) = civil_from_days(days);
+    format!("{y:04}-{m:02}-{d:02} {h:02}:{mi:02}:{s:02}")
+}
+
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as i64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 #[cfg(test)]
@@ -198,7 +212,6 @@ mod tests {
         assert_eq!(bins[0], PathBuf::from("/home/x/.local/share/singbox/sing-box"));
         assert!(bins.iter().any(|b| *b == PathBuf::from("/usr/bin/sing-box")));
         let cfgs = config_candidates("/home/x", &bins[0]);
-        // Binary dizini en öncelikli aday
         assert_eq!(cfgs[0], PathBuf::from("/home/x/.local/share/singbox/config.json"));
         assert!(cfgs.contains(&PathBuf::from("/home/x/vpn-config.json")));
     }
@@ -213,8 +226,53 @@ mod tests {
 
     #[test]
     fn port_alive_false_without_proxy() {
-        // Test ortamında 10808 dinleyen bir şey varsa bile bağlantı hatası
-        // durumunda false DÖNMELİ; ayaktaysa true döner (ortama bağlı değil).
         let _ = port_alive();
+    }
+
+    #[test]
+    fn civil_from_days_epoch_and_known_dates() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(20_690), (2026, 8, 25));
+        assert_eq!(civil_from_days(-1), (1969, 12, 31));
+        assert_eq!(civil_from_days(11_016), (2000, 2, 29));
+    }
+
+    #[test]
+    fn chrono_stamp_shape() {
+        let s = chrono_stamp();
+        assert_eq!(s.len(), 19);
+        let b = s.as_bytes();
+        assert_eq!(b[4], b'-');
+        assert_eq!(b[7], b'-');
+        assert_eq!(b[10], b' ');
+        assert_eq!(b[13], b':');
+        assert_eq!(b[16], b':');
+    }
+
+    #[test]
+    fn find_singbox_pids_detects_matching_cmdline() {
+        let mut child = std::process::Command::new("bash")
+            .arg("-c")
+            .arg("exec -a \"sing-box run\" sleep 30")
+            .spawn()
+            .expect("bash mevcut olmalı");
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let mut found = false;
+        for _ in 0..20 {
+            if find_singbox_pids().contains(&(child.id() as i32)) {
+                found = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        signal_pid(child.id() as i32, libc::SIGKILL);
+        let _ = child.wait();
+        assert!(found, "cmdline eşleşen süreç bulunmalıydı");
+    }
+
+    #[test]
+    fn find_singbox_pids_skips_unrelated_processes() {
+        let pids = find_singbox_pids();
+        assert!(!pids.contains(&(std::process::id() as i32)));
     }
 }

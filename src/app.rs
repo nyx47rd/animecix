@@ -63,8 +63,6 @@ pub struct App {
     pub home_acts: Rc<RefCell<Vec<Option<usize>>>>,
 }
 
-/// Çalışma anında Anime4K shader dosyasının yolunu bulur (AppImage'da APPDIR,
-/// geliştirme ortamında exe'nin yakınları). Bulunamazsa None -> özellik pas geçilir.
 fn resolve_upscale_shader(name: &str) -> Option<String> {
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
     if let Ok(ad) = std::env::var("APPDIR") {
@@ -79,8 +77,6 @@ fn resolve_upscale_shader(name: &str) -> Option<String> {
             candidates.push(parent.join("../../assets/upscale").join(name));
         }
     }
-    // Yalnızca test/derleme ortamında: kaynak ağacındaki assets'i de ara
-    // (release binary CARGO_MANIFEST_DIR olmadan derlenir, etkilenmez).
     #[cfg(test)]
     if let Some(d) = option_env!("CARGO_MANIFEST_DIR") {
         candidates.push(std::path::Path::new(d).join("assets/upscale").join(name));
@@ -88,8 +84,6 @@ fn resolve_upscale_shader(name: &str) -> Option<String> {
     candidates.into_iter().find(|p| p.exists()).map(|p| p.to_string_lossy().into_owned())
 }
 
-/// AniSkip zamanlarından mpv input.conf içeriğini üretir. Zamanlar yoksa
-/// tuşlara "bulunamadı" mesajı bağlanır (eski davranış korunur).
 fn aniskip_input_conf(t: &api::AniSkipTimes) -> String {
     let fmt_sec = |sec: f64| -> String {
         let s = sec as u64;
@@ -112,9 +106,6 @@ impl App {
     pub fn new(app: &adw::Application) -> Rc<Self> {
         let client = Arc::new(Client::new());
 
-        // Açılışta ağı GTK pencere kurulumuyla çakıştır: bağlantıyı ısıt (warmup) ve ana
-        // sayfa JSON'unu önceden indir (prefetch). Böylece show_page(Home)+fetch_home() çağrıldığında
-        // veri bellek önbelleğinde hazır olur; soğuk açılış ~2.3-3s'ye iner. Pencereyi bloklamaz.
         {
             let cl = client.clone();
             std::thread::spawn(move || {
@@ -177,7 +168,6 @@ impl App {
 
 
 
-        // Sayfa geçişleri için GTK Stack
         let main_stack = gtk::Stack::new();
         main_stack.set_transition_type(gtk::StackTransitionType::SlideLeftRight);
         main_stack.set_transition_duration(220);
@@ -378,7 +368,6 @@ impl App {
             this.show_page(&Page::Settings);
         });
 
-        // === Global arama kısayolu (Ayardan okunur) ===
         {
             let this = self.clone_ref();
             let search_bar = self.search_bar.clone();
@@ -399,7 +388,6 @@ impl App {
                     search_bar.set_search_mode(true);
                     search_entry.grab_focus();
 
-                    // Klavyeden kısayol basıldığında ipucu gösterilmez (zaten kısayol kullanılıyor)
                     if !this.client.is_search_tip_seen() {
                         this.client.set_search_tip_seen(true);
                     }
@@ -435,17 +423,12 @@ impl App {
         self.progress_bars.borrow_mut().clear();
         self.back_btn.set_sensitive(self.page_history.borrow().len() > 1);
 
-        // Animasyonlu sayfa geçişi:
-        // 1) Aynı isimli eski child varsa kaldır (duplicate engellemek için)
-        // 2) Yeni child ekle ve görüntr — GTK Stack eski sayfa üzerinden animasyon yapar
-        // 3) 300ms sonra (animasyon bittikten sonra) eski sayfaları temizle
         fn switch<T: IsA<gtk::Widget>>(
             stack: &gtk::Stack,
             name: &str,
             transition: gtk::StackTransitionType,
             widget: T,
         ) {
-            // Aynı isimli child varsa önce kaldır (duplicate engellemek için)
             if let Some(old) = stack.child_by_name(name) {
                 stack.remove(&old);
             }
@@ -453,14 +436,10 @@ impl App {
             stack.add_named(&widget, Some(name));
             stack.set_visible_child_name(name);
 
-            // Animasyon bittikten sonra (>220ms) gizli kalan eski sayfaları temizle.
-            // O AN görünen child'ı koru (hardcoded isim değil!) — hızlı geri tuşunda
-            // başka bir cleanup'ın yeni sayfayı silmesini önler.
             let stack_c = stack.clone();
             glib::timeout_add_local_once(
                 std::time::Duration::from_millis(400),
                 move || {
-                    // O an gerçekte görünen child
                     let Some(visible) = stack_c.visible_child() else { return; };
                     let mut to_rm = vec![];
                     let mut cur = stack_c.first_child();
@@ -515,8 +494,6 @@ impl App {
         }
     }
 
-    /// CLI: `--goto <sayfa>` ile başlangıçta belirli bir sayfayı açar.
-    /// Ekran görüntüsü otomasyonu için kullanılır; AT-SPI/a11y'ye ihtiyaç duymaz.
     fn apply_goto_arg(&self) {
         let args: Vec<String> = std::env::args().collect();
         let mut it = args.iter();
@@ -592,7 +569,6 @@ impl App {
         root.set_margin_start(24);
         root.set_margin_end(24);
 
-        // --- Başlık Bölümü ---
         let header_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
         header_box.set_halign(gtk::Align::Center);
 
@@ -614,7 +590,6 @@ impl App {
 
         root.append(&header_box);
 
-        // --- 1. Bağımlılık Kontrol Grubu ---
         let dep_group = adw::PreferencesGroup::new();
         dep_group.set_title("1. Sistem Bağımlılık Kontrolü");
         dep_group.set_description(Some("Uygulamanın sorunsuz çalışabilmesi için gerekli sistem araçları:"));
@@ -641,7 +616,6 @@ impl App {
 
         root.append(&dep_group);
 
-        // --- 2. Masaüstü Entegrasyon Grubu ---
         let desktop_group = adw::PreferencesGroup::new();
         desktop_group.set_title("2. Masaüstü Uygulama Menüsü Entegrasyonu");
         desktop_group.set_description(Some("AnimeciX'i işletim sisteminizin uygulama başlatıcı menüsüne ekleyin:"));
@@ -699,7 +673,6 @@ impl App {
         desktop_group.add(&desktop_row);
         root.append(&desktop_group);
 
-        // --- 3. Hızlı Başlangıç Ayarları Grubu ---
         let player_group = adw::PreferencesGroup::new();
         player_group.set_title("3. Hızlı Başlangıç Tercihleri");
 
@@ -717,7 +690,6 @@ impl App {
         player_group.add(&aniskip_row);
         root.append(&player_group);
 
-        // --- 4. Kurulumu Tamamla Butonu ---
         let start_btn = gtk::Button::with_label("Kurulumu Tamamla ve Başlat 🚀");
         start_btn.add_css_class("suggested-action");
         start_btn.add_css_class("pill");
@@ -791,7 +763,6 @@ impl App {
         let scroll = gtk::ScrolledWindow::new();
         let cats = self.cats.borrow();
 
-        // Kategoriler henüz yüklenmediyse yükleme spinner'ı göster
         if cats.is_empty() {
             let spinner_box = gtk::Box::new(gtk::Orientation::Vertical, 16);
             spinner_box.set_valign(gtk::Align::Center);
@@ -891,7 +862,6 @@ impl App {
         );
         scroll.set_child(Some(&view));
 
-        // Sürükleme sırasında listenin kenarlarına yaklaşınca otomatik kaydır (auto-scroll)
         let motion = gtk::DropControllerMotion::new();
         let drag_pos: Rc<RefCell<Option<(f64, f64)>>> = Rc::new(RefCell::new(None));
         let motion_state = drag_pos.clone();
@@ -906,7 +876,6 @@ impl App {
         });
         scroll.add_controller(motion);
 
-        // İmleç kenarda beklese bile kaydırmaya devam etsin diye zamanlayıcı
         let scroll_t = scroll.clone();
         let timer_state = drag_pos.clone();
         gtk::glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
@@ -957,7 +926,6 @@ impl App {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
             row.add_css_class("fav-item-card");
 
-            // Poster (maraton kartıyla birebir aynı)
             let pic = gtk::Picture::new();
             pic.set_width_request(48);
             pic.set_height_request(72);
@@ -967,7 +935,6 @@ impl App {
             pic.set_valign(gtk::Align::Center);
             self.covers.load_cover(t.poster.as_deref(), &pic, 48, 72);
 
-            // Metin bloğu (maraton kartıyla aynı yapı)
             let info_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
             info_box.set_valign(gtk::Align::Center);
             info_box.set_hexpand(true);
@@ -982,7 +949,6 @@ impl App {
             info_box.append(&name);
             episodes_view::append_title_submeta(&info_box, &t);
 
-            // Butonlar (maraton kartıyla aynı: İzle + Çıkar)
             let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             actions.set_valign(gtk::Align::Center);
 
@@ -1135,7 +1101,6 @@ impl App {
     fn build_episodes_view(&self, title: &Title, eps: &[Episode]) -> gtk::ScrolledWindow {
         let scroll = gtk::ScrolledWindow::new();
 
-        // Eğer içerik Film ise özel Film Detay Görünümü sunulur
         let is_movie = title.title_type.as_deref() == Some("movie")
             || (eps.len() <= 1 && eps.first().map(|e| e.name.contains("Filmi")).unwrap_or(false));
 
@@ -1181,7 +1146,6 @@ impl App {
                     this_play.play(&title_c, &ep_c);
                 },
             );
-            // Film progress bar'ını live güncelleme için kaydet
             let prog_key = format!("{}:1:1", title.id);
             self.progress_bars.borrow_mut().insert(prog_key, (movie_pb, movie_lbl));
             scroll.set_child(Some(&movie_view));
@@ -1190,7 +1154,6 @@ impl App {
 
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
-        // 1) Dizi Detay Başlık Kartı (Kapak resmi, Yıl, Açıklama vb.)
         let header_poster = self.covers.cover_picture(title.poster.as_deref(), 120, 180);
         let bookmark_btn = components::bookmark_button(&self.client, title);
         let this_bm = self.clone_ref();
@@ -1219,7 +1182,6 @@ impl App {
 
         let settings = self.settings.borrow();
 
-        // 2) Tek Seferlik İpucu Banner'ı (Hızlı Arama)
         if settings.quick_search_enabled && !self.client.is_quick_search_tip_seen() {
             let this_tip = self.clone_ref();
             let tip_banner = episodes_view::create_quick_search_tip_banner(
@@ -1231,7 +1193,6 @@ impl App {
             root.append(&tip_banner);
         }
 
-        // 3) Tek Seferlik İpucu Banner'ı (Sağ Tık → İzlendi/İzlenmedi)
         if !self.client.is_right_click_tip_seen() {
             let this_tip2 = self.clone_ref();
             let right_click_tip = episodes_view::create_right_click_tip_banner(move || {
@@ -1240,7 +1201,6 @@ impl App {
             root.append(&right_click_tip);
         }
 
-        // 3) Hızlı Bölüm Arama Giriş Çubuğu (Ayarlara bağlı)
         let ep_search_entry = gtk::SearchEntry::new();
         if settings.quick_search_enabled {
             let search_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -1256,7 +1216,6 @@ impl App {
             search_box.append(&ep_search_entry);
             root.append(&search_box);
 
-            // Klavye Kısayolu Dinleyicisi (Uygulama odaklı)
             let shortcut_key = settings.quick_search_shortcut.clone();
             let ep_entry_clone = ep_search_entry.clone();
             let key_controller = gtk::EventControllerKey::new();
@@ -1282,7 +1241,6 @@ impl App {
         }
         drop(settings);
 
-        // 4) Bölüm Listesi
         let list_box = gtk::ListBox::new();
         list_box.add_css_class("content-list");
         list_box.set_margin_start(12);
@@ -1363,7 +1321,6 @@ impl App {
                     || (saved_dur > 0.0 && saved_pos / saved_dur > 0.9)
                 ));
 
-                // İzlendi simgesi (dinamik - sağ tık ile toggle)
                 let done_icon = gtk::Image::from_icon_name("object-select-symbolic");
                 done_icon.add_css_class("dim-label");
                 done_icon.set_tooltip_text(Some("İzlendi"));
@@ -1371,7 +1328,6 @@ impl App {
                 done_icon.set_visible(*is_watched.borrow());
                 row.append(&done_icon);
 
-                // Sol tık → izle
                 let this_play = self.clone_ref();
                 let title_play = title.clone();
                 let ep_play = e.clone();
@@ -1382,7 +1338,6 @@ impl App {
                 });
                 row.add_controller(click);
 
-                // Sağ tık → context menü (İzlendi Toggle)
                 let this_ctx = self.clone_ref();
                 let title_ctx = title.clone();
                 let ep_ctx = e.clone();
@@ -1405,7 +1360,6 @@ impl App {
                     let menu_model = gio::Menu::new();
                     menu_model.append(Some(label), Some("row.toggle-watched"));
 
-                    // Action group → row'a bağla
                     let client_c = this_ctx.client.clone();
                     let title_c = title_ctx.clone();
                     let ep_c = ep_ctx.clone();
@@ -1442,10 +1396,8 @@ impl App {
                         this_refresh.toast.add_toast(toast);
                     });
                     action_group.add_action(&action);
-                    // action group'u row'a ekle (popover parent ile aynı widget)
                     row_ctx.insert_action_group("row", Some(&action_group));
 
-                    // Popover'ı row'a bağla, koordinatlar row'a göre
                     let popover = gtk::PopoverMenu::from_model(Some(&menu_model));
                     popover.set_parent(&row_ctx);
                     let rect = gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
@@ -1462,7 +1414,6 @@ impl App {
                 list_box.append(row_widget);
             }
 
-            // Arama çubuğu filtreleme mantığı
             let rows_rc = Rc::new(rows);
             ep_search_entry.connect_search_changed(move |e| {
                 let query = e.text().trim().to_lowercase();
@@ -1558,8 +1509,6 @@ impl App {
     fn open_episodes(&self, title: Title) {
         self.busy(true);
         self.spawn(move |c| {
-            // Favoriler/geçmiş/maratondan gelen başlıklar eski şemalı olabilir;
-            // detay başlığında tür/süre/yayın görünsün diye taze veriyle zenginleştir.
             let enriched = c.enrich_title(&title);
             let res = c.episodes(&enriched);
             move || Msg::Eps(enriched.clone(), res)
@@ -1573,9 +1522,6 @@ impl App {
         let is_movie = title.title_type.as_deref() == Some("movie");
         self.busy(true);
         self.spawn(move |c| {
-            // HİBRİT: yalnızca ilk 3 adayı çöz (hızlı açılış); kalan embed'ler
-            // supervisor'da gerektiğinde JIT çözülür (resolve_single).
-            // Tercih edilen host (bu dizide en son ÇALIŞAN kaynak) başa alınır.
             let pref = c.get_preferred_host(title.id);
             let res = if is_movie {
                 c.resolve_movie(title.id).map(|u| (vec![u], Vec::new(), Vec::new()))
@@ -1583,10 +1529,8 @@ impl App {
                 c.resolve_top(title.id, ep.episode, ep.season, 3, pref.as_deref())
                     .and_then(|fast_pairs| {
                         let mut fb = c.episode_candidates(title.id, ep.episode, ep.season)?;
-                        // Hızlı kademe ilk 3 adayı DENEDİ; yedek 4.'den başlar
                         let tried = 3.min(fb.len());
                         fb.drain(..tried);
-                        // Tercih edilen hostu yedeklerde de başa al
                         if let Some(p) = &pref {
                             fb.sort_by_key(|u| {
                                 if api::Client::source_host_hint(u) == p.as_str() { 0 } else { 1 }
@@ -1601,12 +1545,6 @@ impl App {
         });
     }
 
-    /// Bölümü oynatır; en iyi kaliteli kaynaktan başlar, açılamazsa sıradaki kaynağa geçer.
-    /// mpv çıktığında supervisor'ın yeniden deneme kararı (saf fonksiyon, test edilebilir).
-    /// Döndürür: (yeniden_dene, _). Kararlar:
-    /// - exited=false                                   -> yeniden deneme yok (hâlâ çalışıyor)
-    /// - playing && !success (kaynak hatalı çıktı)       -> YENİDEN DENE (playing=false)
-    /// - playing && success (kullanıcı kapattı/bölüm bitti) -> yeniden deneme YOK
     fn decide_retry(
         exited: bool,
         success: bool,
@@ -1621,19 +1559,12 @@ impl App {
         (false, playing)
     }
 
-    /// mpv soketi hiç oluşmadıysa denemeden vazgeçme süresi (sn).
     const SOCKET_TIMEOUT_SECS: u64 = 25;
 
-    /// Kaynak ölü mü? SADECE medya hiç yüklenmediğinde (media_loaded=false),
-    /// core idle'ken ve duration hâlâ 0 iken, eşik süre dolduğunda true.
-    /// Bir kez yüklendiyse (duration>0 görüldüyse) kaynak sağlamdır; EOF'taki
-    /// duraklama dahil asla bu kararla öldürülmez.
-    /// `threshold_secs` kullanıcı ayarıdır (varsayılan 20, yavaş internet için artırılabilir).
     fn source_is_dead(elapsed_secs: u64, core_idle: bool, duration: f64, media_loaded: bool, threshold_secs: u64) -> bool {
         !media_loaded && core_idle && duration <= 0.0 && elapsed_secs >= threshold_secs
     }
 
-    /// mpv soketi hiç belirmeden süre dolduysa true (kaynağı hiç açamadı).
     fn socket_timeout_hit(elapsed_secs: u64, socket_seen: bool) -> bool {
         !socket_seen && elapsed_secs >= Self::SOCKET_TIMEOUT_SECS
     }
@@ -1667,12 +1598,8 @@ impl App {
         let auto_fullscreen = self.settings.borrow().auto_fullscreen;
         let upscale = self.settings.borrow().upscale.clone();
         let aniskip_enabled = self.settings.borrow().aniskip_enabled;
-        // AniSkip artık UI'ı BLOKLAMAZ: çözücü işçisi arka planda dener (yavaş
-        // ağlarda bölüm boyunca periyodik tekrar), sonucu paylaşılan duruma yazar.
         let aniskip_shared = std::sync::Arc::new(std::sync::Mutex::new(api::AniSkipTimes::default()));
 
-        // Başlangıçta yer tutucu tuşlar; gerçek seek'ler çözüm bitince IPC
-        // keybind komutuyla ve input.conf dosyası güncellenerek bağlanır.
         let skip_cmd = if aniskip_enabled {
             "s show-text \"⏳ AniSkip çözümleniyor…\" 2000\n".to_string()
         } else {
@@ -1715,13 +1642,10 @@ impl App {
         self.toast.add_toast(t);
 
         let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-        // Şu an izlenen bölüm (sonraki bölüme geçişte güncellenir) — ilerleme ve "izlendi"
-        // işaretlemesi bunun üzerinden yapılır, böylece sonraki bölüm izlenmeden tamamlanmaz.
         let current_shared = std::sync::Arc::new(std::sync::Mutex::new((episode, season)));
 
         let mpv_child = std::sync::Arc::new(std::sync::Mutex::new(None::<std::process::Child>));
 
-        // Worker/supervisor iş parçacıklarından ana iş parçacığına toast bildirimi (GObject'lar Send değil)
         let (toast_tx, toast_rx) = std::sync::mpsc::channel::<String>();
         const DISMISS_OPENING: &str = "__animecix_dismiss_opening__";
         {
@@ -1743,8 +1667,6 @@ impl App {
                 drop(rx);
                 if let Some(m) = msg {
                     if m == DISMISS_OPENING {
-                        // Bölüm açıldı; ama OSD (bölüm adı) en az 10 sn görünür
-                        // kalsın — mpv tam ekrana geçene kadar kullanıcı okuyabilsin.
                         if let Some(t) = opening_toast_h.borrow_mut().take() {
                             let elapsed = opening_toast_shown_at_h
                                 .borrow()
@@ -1775,10 +1697,6 @@ impl App {
             });
         }
 
-        // AniSkip çözücü işçisi: UI'ı bloklamaz. Yavaş ağlarda ilk denemeler
-        // timeout'a düşebildiği için bölüm boyunca ~45 sn'de bir yeniden dener
-        // (en fazla 5). Çözülünce input.conf güncellenir + mpv'ye canlı
-        // 'keybind' komutu gönderilir + kullanıcıya haber verilir.
         if aniskip_enabled {
             let alive_r = alive.clone();
             let client_r = client.clone();
@@ -1811,7 +1729,6 @@ impl App {
                         std::thread::sleep(std::time::Duration::from_secs(45));
                     }
                 }
-                // Pes edildi: tuşlara eski "bulunamadı" mesajını bağla.
                 if std::path::Path::new(&sock_r).exists() {
                     crate::player::send_mpv_cmd(&sock_r, "{\"command\":[\"keybind\",\"s\",\"show-text \\\"⚠️ İntro zamanı bulunamadı (AniSkip)\\\" 2500\"]}\n");
                     crate::player::send_mpv_cmd(&sock_r, "{\"command\":[\"keybind\",\"e\",\"show-text \\\"⚠️ Outro zamanı bulunamadı (AniSkip)\\\" 2500\"]}\n");
@@ -1820,7 +1737,6 @@ impl App {
             });
         }
 
-        // İzleme (progress / aniskip) işçi iş parçacığı — tüm denemeler boyunca yaşar
         {
             let alive = alive.clone();
             let sock_poll = sock_path.clone();
@@ -1833,7 +1749,6 @@ impl App {
                 let mut op_prompted = false;
                 let mut ed_prompted = false;
 
-                // Soket belirene kadar bekle
                 while alive.load(std::sync::atomic::Ordering::Relaxed)
                     && !std::path::Path::new(&sock_poll).exists()
                 {
@@ -1843,12 +1758,9 @@ impl App {
 
                 loop {
                     if std::path::Path::new(&sock_c).exists() {
-                        // AniSkip zamanları arka planda sonradan da çözülebilir;
-                        // her turda güncel anlık görüntüyü al.
                         let snap = aniskip_c.lock().unwrap().clone();
                         let (pos, dur) = crate::player::query_mpv_position(&sock_c).unwrap_or((0.0, 0.0));
                         if let Some(st) = snap.op_start {
-                            // Pencere geniş: yavaş ağda tampon sıçraması uyarıyı kaçırmasın.
                             if !op_prompted && pos >= (st - 1.5) && pos <= (st + 25.0) {
                                 op_prompted = true;
                                 crate::player::send_mpv_cmd(&sock_c, "{\"command\":[\"show-text\", \"⏩ İntro Başladı ('s' ile atlayabilirsiniz)\", 7000]}\n");
@@ -1891,8 +1803,6 @@ impl App {
                 drop(rx);
                 let cur = *current_shared_t.lock().unwrap();
                 let (cur_ep, cur_season) = cur;
-                // İlerleme anahtarı her zaman GÜNCEL bölüme göre olmalı (başlangıç bölümüne
-                // sabitlenirse 'n' ile geçilen bölümün ilerlemesi öncekine kaydedilir).
                 let pk_cur = format!("{tid}:{cur_season}:{cur_ep}");
 
                 if disconnected {
@@ -1920,8 +1830,6 @@ impl App {
                         }
                     }
                     client_prog.save_progress(tid, cur.1, cur.0, pos, dur);
-                    // İzlenme eşiği aşıldıysa bölümü "izlendi" işaretle. Sonraki bölüme geçerken
-                    // izlenmeden tamamlanmasın diye işaretleme yalnızca burada yapılır.
                     if api::Client::played_enough(pos, dur) && marked_ep != Some(cur) {
                         client_prog.save_watched(&api::Watched { title_id: tid, episode: cur.0, season: cur.1 }, "");
                         marked_ep = Some(cur);
@@ -1931,7 +1839,6 @@ impl App {
             });
         }
 
-        // Kaynak deneme (supervisor) iş parçacığı — en iyi kaliteli önce, başarısız olursa sıradakine geç
         {
             let alive = alive.clone();
             let sock_path_c = sock_path.clone();
@@ -1943,20 +1850,13 @@ impl App {
             let upscale_c = upscale;
             let mpv_child_c = mpv_child.clone();
             let mut candidates: Vec<String> = candidates.to_vec();
-            // HIZLI KADEME: boyuta göre sıralı ilk kaynaklar. Bitince yedek
-            // embed'ler JIT çözülür, açılış tüm kaynakları beklemez.
             let fallback_embeds_c = fallback_embeds.to_vec();
             let fast_embeds_c = fast_embeds.to_vec();
             let candidates_len_c = candidates.len();
             let client_fb = self.client.clone();
             let tid_c = title.id;
-            // Kullanıcı ayarı: kaynak açılış sabrı (sn). Ölü kaynak bu süre kadar
-            // beklenir, sonra bir sonrakine geçilir.
             let patience_c = self.client.load_settings().source_patience_secs.max(10);
             let total = candidates.len() + fallback_embeds_c.len();
-            // Yerel VPN proxy'si (sing-box/Proton, port 10808) ayaktaysa video trafiğini
-            // oradan çıkar — ISS kısıtlamasını aşar. Kapalıysa uygulama normal devam
-            // eder (kırılmaz yapı: proxy yoksa bayrak eklenmez).
             let use_proxy = std::net::TcpStream::connect_timeout(
                 &"127.0.0.1:10808".parse().expect("statik adres"),
                 std::time::Duration::from_millis(300),
@@ -1969,7 +1869,6 @@ impl App {
                     let url: String = if i < candidates.len() {
                         candidates[i].clone()
                     } else {
-                        // JIT yedek: embed URL'i şimdi çöz; pasif/ölüyse atla
                         let emb = &fallback_embeds_c[i - candidates.len()];
                         eprintln!("[SUP] JIT yedek çözümleniyor");
                         match client_fb.resolve_single(emb) {
@@ -2008,10 +1907,6 @@ impl App {
                         }.as_deref()))
                         .arg(url.as_str());
                     if url.contains("video.sibnet.ru/v/") {
-                        // Sibnet CDN'i WAF üzerinden korunuyor: mp4 isteği yalnızca
-                        // DOĞRU Referer (embed sayfası) + tarayıcı benzeri UA + Accept
-                        // ile 302 vererek imzalı CDN URL'ine yönleniyor. Yanlış/eksik
-                        // header 400 döndürür. Referer'ı mp4 yolundaki videoid'den türet.
                         let vid = url
                             .split("/v/")
                             .nth(1)
@@ -2029,9 +1924,6 @@ impl App {
                         ));
                     }
                     if use_proxy {
-                        // sing-box mixed inbound HTTP proxy modu (aynı port 10808).
-                        // mpv tüm http/https akışını CONNECT ile tünelden geçirir;
-                        // sibnet Referer başlıkları iç istekte aynen korunur.
                         cmd.arg("--http-proxy=http://127.0.0.1:10808");
                     }
                     eprintln!("[SUP] mpv spawn deneniyor (ep={}, kaynak={}, url={:.80})", episode, i, url);
@@ -2042,18 +1934,10 @@ impl App {
                     eprintln!("[SUP] mpv spawn edildi (ep={}, kaynak={})", episode, i);
                     *mpv_child_c.lock().unwrap() = Some(child);
 
-                    // Bölüm başarıyla açıldıktan sonra supervisor, mpv kapatanacağını
-                    // KENDİSİ poller (try_wait); böylece worker aynı mutex'i kilitleyip
-                    // mpv'yi öldürebilir. ÖNEMLİ: kilidi blocking `wait()` ile TUTMUYORUZ,
-                    // aksi halde worker kill için kilidi alamaz ve deadlock olurdu (mpv
-                    // kapanmaz, sonraki bölüme geçilmezdi).
                     let start = std::time::Instant::now();
                     let mut playing = false;
                     let mut media_loaded = false;
                     loop {
-                        // Süreç çıktıysa döngüden çık. Çıkış kodunu da yakala: kullanıcı
-                        // kapatması başarılı (0), kaynak hatası başarısız (non-zero). Kilit
-                        // yalnızca try_wait süresince KISA tutulur.
                         let (exited, success) = {
                             let mut g = mpv_child_c.lock().unwrap();
                             match g.as_mut().unwrap().try_wait() {
@@ -2063,7 +1947,6 @@ impl App {
                             }
                         };
                         if exited {
-                            // Yeniden deneme kararı: kaynak hatalı çıkışı -> sonraki kaynağı dene;
                             let retry = Self::decide_retry(
                                 true,
                                 success,
@@ -2075,7 +1958,6 @@ impl App {
                             }
                             break;
                         }
-                        // IPC soketi oluştuysa MPV dosyayı açtı demektir.
                         if std::path::Path::new(&sock_path_c).exists() {
                             if !playing {
                                 eprintln!("[SUP] socket belirdi, oynatma başladı (ep={}, kaynak={})", episode, i);
@@ -2083,16 +1965,6 @@ impl App {
                             }
                             playing = true;
                         }
-                        // "Açıldı" sayıldı ama kaynak bozuksa mpv soketi açar, sonra
-                        // hata verir / idle kalır / media yüklenmez. Bu durumda supervisor
-                        // playing=true sanıp BİR DAHA ASLA başka kaynağa geçmezdi (saatlerce
-                        // takılma). KURAL (v2.7.9): medya HİÇ yüklenmediyse (duration hep 0)
-                        // ve core-idle ise kullanıcı sabrı (source_patience_secs) sonunda
-                        // kaynağı öldür, sıradakine geç. Sibnet'in WAF yönlendirme + CDN zinciri
-                        // yavaş olabildiği için eşik bilinçli cömert; bir kez duration>0 görüldüyse
-                        // kaynak SAĞLAMDIR ve bu yol ile asla öldürülmez (EOF'taki duraklama
-                        // dahil). v2.7.7'deki 8sn eşiği yavaş yüklenen kaynakları daha
-                        // açılmadan öldürüp TÜM bölümlerin açılamamasına yol açmıştı.
                         if playing {
                             let idle = crate::player::query_mpv_prop(&sock_path_c, "core-idle").unwrap_or(0.0);
                             let dur = crate::player::query_mpv_prop(&sock_path_c, "duration").unwrap_or(0.0);
@@ -2110,7 +1982,6 @@ impl App {
                                 break;
                             }
                         }
-                        // Yalnızca hiç açılmadıysa zaman aşımıyla başarısız say.
                         if Self::socket_timeout_hit(start.elapsed().as_secs(), playing) {
                             break;
                         }
@@ -2120,8 +1991,6 @@ impl App {
                     eprintln!("[SUP] döngü bitti (ep={}, kaynak={}, playing={})", episode, i, playing);
 
                     if playing {
-                        // ÇALIŞAN kaynağı hatırla: bir dahaki oynatmada bu host
-                        // kademenin başına alınır (kullanıcı tarafında doğrulanmış).
                         let src_hint = if i < fast_embeds_c.len() {
                             api::Client::source_host_hint(&fast_embeds_c[i])
                         } else if i >= candidates_len_c {
@@ -2132,8 +2001,6 @@ impl App {
                         if !src_hint.is_empty() {
                             client_fb.set_preferred_host(tid_c, src_hint);
                         }
-                        // Bölüm başarıyla açıldı; mpv kapandığında başka kaynağı denemiyoruz.
-                        // Worker bu mpv'yi artık kilitlemeyeceğinden kilitli wait güvenli.
                         if let Some(c) = mpv_child_c.lock().unwrap().as_mut() { let _ = c.wait(); }
                         break 'supervisor;
                     } else {
@@ -2188,7 +2055,6 @@ mod decide_retry_tests {
 
     #[test]
     fn decide_retry_source_error_retries() {
-        // Soket belirdi, mpv HATA ile çıktı -> sonraki kaynağı dene
         let (retry, playing) = App::decide_retry(true, false, true);
         assert!(retry, "kaynak hatası yeniden denenmeli");
         assert!(!playing);
@@ -2196,7 +2062,6 @@ mod decide_retry_tests {
 
     #[test]
     fn decide_retry_user_close_no_retry() {
-        // Kullanıcı kapattı (success=true) -> yeniden deneme yok
         let (retry, playing) = App::decide_retry(true, true, true);
         assert!(!retry);
         assert!(playing);
@@ -2211,19 +2076,14 @@ mod decide_retry_tests {
 
     #[test]
     fn decide_retry_never_opened_no_retry_flag() {
-        // Hiç açılmadı (playing=false): supervisor'ın else dalı zaten dener;
-        // decide_retry yalnızca playing=false döndürmeli.
         let (retry, playing) = App::decide_retry(true, false, false);
         assert!(!retry);
         assert!(!playing);
     }
 
-    // ---- v2.7.9: kaynak ölümlü / soket zaman aşımı kararları ----
 
     #[test]
     fn slow_source_within_window_is_not_killed() {
-        // REGRESYON (v2.7.7): sibnet WAF+CDN zinciri 8-20sn sürebilir;
-        // yavaş ama sağlam kaynak eşik dolmadan KESİNLİKLE öldürülmemeli.
         assert!(!App::source_is_dead(5, true, 0.0, false, 20), "5sn'de öldürülmemeli");
         assert!(!App::source_is_dead(19, true, 0.0, false, 20), "19sn'de hâlâ sabırlı olunmalı");
     }
@@ -2236,24 +2096,19 @@ mod decide_retry_tests {
 
     #[test]
     fn threshold_is_user_configurable() {
-        // Kullanıcı sabrı 90sn'e çıkarıldıysa 45sn'de öldürülmemeli.
         assert!(!App::source_is_dead(45, true, 0.0, false, 90), "90sn sabırda 45sn ölü sayılmamalı");
         assert!(App::source_is_dead(90, true, 0.0, false, 90), "90sn sabırda eşikte ölü");
     }
 
     #[test]
     fn loaded_source_is_never_killed_by_dead_check() {
-        // Bir kez duration>0 görüldüyse kaynak sağlamdır: EOF'taki duraklama
-        // (idle=1) bile öldürme tetiklememeli.
         assert!(!App::source_is_dead(600, true, 1435.0, true, 20));
         assert!(!App::source_is_dead(600, true, 0.0, true, 20), "yüklendiyse duration anlık 0 okunsa bile");
     }
 
     #[test]
     fn playing_source_or_unknown_duration_not_dead() {
-        // Aktif çalıyor (idle değil) -> ölü değil
         assert!(!App::source_is_dead(600, false, 0.0, false, 20));
-        // duration bilgisi henüz pozitifse (yükleme sürüyor) -> ölü değil
         assert!(!App::source_is_dead(600, true, 12.0, false, 20));
     }
 
@@ -2266,8 +2121,6 @@ mod decide_retry_tests {
 
     #[test]
     fn anime4k_normal_maps_to_bundled_cnn_shader() {
-        // REGRESYON: 'normal' eski 'Original' (kalite düşüren) mod yerine gerçek
-        // bir CNN upscaler'a bağlı olmalı ve shader bundle edilmiş olmalı.
         let p = super::resolve_upscale_shader("Anime4K_Upscale_CNN_x2_M.glsl");
         assert!(p.is_some(), "normal modu için CNN_x2_M shader'ı bundle edilmiş olmalı");
     }

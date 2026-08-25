@@ -1,7 +1,6 @@
 use gtk::prelude::*;
 use crate::api::{Client, Title};
 
-/// Favorilere ekleme / çıkarma ikonu olan yuvarlak buton
 pub fn bookmark_button(client: &Client, t: &Title) -> gtk::Button {
     let saved = client.is_saved(t.id);
     let b = gtk::Button::from_icon_name(if saved {
@@ -17,7 +16,6 @@ pub fn bookmark_button(client: &Client, t: &Title) -> gtk::Button {
     b
 }
 
-/// Maratona ekleme / çıkarma ikonu olan yuvarlak buton
 pub fn marathon_button(client: &Client, t: &Title) -> gtk::Button {
     let in_marathon = client.is_in_marathon(t.id);
     let b = gtk::Button::from_icon_name(if in_marathon {
@@ -32,7 +30,6 @@ pub fn marathon_button(client: &Client, t: &Title) -> gtk::Button {
     b
 }
 
-/// Sayfa boş kaldığında gösterilen AdwStatusPage yer tutucusu
 pub fn create_status_page(title: &str, description: &str, icon_name: &str) -> adw::StatusPage {
     let sp = adw::StatusPage::new();
     sp.set_title(title);

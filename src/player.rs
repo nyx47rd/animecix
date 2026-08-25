@@ -2,7 +2,6 @@ use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
-/// MPV IPC soketi üzerinden tek bir sayısal özellik sorgular.
 pub fn query_mpv_prop(sock: &str, prop: &str) -> Option<f64> {
     let mut stream = UnixStream::connect(sock).ok()?;
     stream.set_read_timeout(Some(Duration::from_millis(400))).ok();
@@ -21,14 +20,11 @@ pub fn query_mpv_prop(sock: &str, prop: &str) -> Option<f64> {
     }
 }
 
-/// Tek socket bağlantısı ile time-pos ve duration'ı birlikte sorgular.
-/// Tek seferde iki komut gönderir, iki yanıt okur → %50 daha az gecikme.
 pub fn query_mpv_position(sock: &str) -> Option<(f64, f64)> {
     let mut stream = UnixStream::connect(sock).ok()?;
     stream.set_read_timeout(Some(Duration::from_millis(400))).ok();
     stream.set_write_timeout(Some(Duration::from_millis(400))).ok();
 
-    // İki komutu peş peşe gönder
     let cmd1 = r#"{"command":["get_property","time-pos"]}"#;
     let cmd2 = r#"{"command":["get_property","duration"]}"#;
     stream.write_all(cmd1.as_bytes()).ok()?;
@@ -36,7 +32,6 @@ pub fn query_mpv_position(sock: &str) -> Option<(f64, f64)> {
     stream.write_all(cmd2.as_bytes()).ok()?;
     stream.write_all(b"\n").ok()?;
 
-    // İlk yanıtı oku (time-pos)
     let mut buf = vec![0u8; 512];
     let n1 = stream.read(&mut buf).ok()?;
     let v1: serde_json::Value = serde_json::from_slice(&buf[..n1]).ok()?;
@@ -46,7 +41,6 @@ pub fn query_mpv_position(sock: &str) -> Option<(f64, f64)> {
         return None;
     };
 
-    // İkinci yanıtı oku (duration)
     let n2 = stream.read(&mut buf).ok()?;
     let v2: serde_json::Value = serde_json::from_slice(&buf[..n2]).ok()?;
     let dur = if v2["error"].as_str() == Some("success") {
@@ -58,7 +52,6 @@ pub fn query_mpv_position(sock: &str) -> Option<(f64, f64)> {
     Some((pos, dur))
 }
 
-/// MPV IPC soketi üzerinden JSON komutu gönderir.
 pub fn send_mpv_cmd(sock: &str, json_cmd: &str) -> bool {
     let Ok(mut stream) = UnixStream::connect(sock) else { return false; };
     stream.set_write_timeout(Some(Duration::from_millis(400))).ok();
