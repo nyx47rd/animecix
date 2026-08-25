@@ -521,7 +521,7 @@ impl SettingsView {
         // libadwaita 0.6 subtitle etrafında sarılmaz (yalnızca üç nokta ile keser);
         // uzun açıklamayı ayrı bir wrapping etiketle alt satıra geçiriyoruz.
         let upscale_desc = gtk::Label::new(Some(
-            "Yalnızca kaynak çözünürlüğü ekrandan küçükse etki eder. Anime4K: hafif (DTD, iGPU dostu) / normal (klasik) / ultra (ağır CNN, GPU tüketir).",
+            "Yalnızca kaynak çözünürlüğü ekrandan küçükse etki eder. Anime4K: hafif (DTD, iGPU dostu) / normal (CNN orta, gerçek upscale) / ultra (CNN en kaliteli, güçlü GPU önerilir). 'normal' eski 'klasik' modun aksine kaliteyi düşürmez.",
         ));
         upscale_desc.set_wrap(true);
         upscale_desc.set_xalign(0.0);

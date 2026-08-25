@@ -79,6 +79,12 @@ fn resolve_upscale_shader(name: &str) -> Option<String> {
             candidates.push(parent.join("../../assets/upscale").join(name));
         }
     }
+    // Yalnızca test/derleme ortamında: kaynak ağacındaki assets'i de ara
+    // (release binary CARGO_MANIFEST_DIR olmadan derlenir, etkilenmez).
+    #[cfg(test)]
+    if let Some(d) = option_env!("CARGO_MANIFEST_DIR") {
+        candidates.push(std::path::Path::new(d).join("assets/upscale").join(name));
+    }
     candidates.into_iter().find(|p| p.exists()).map(|p| p.to_string_lossy().into_owned())
 }
 
@@ -1932,7 +1938,7 @@ impl App {
                         .arg("--ytdl-format=bestvideo[height<=1080]+bestaudio/best")
                         .args(crate::api::upscale_mpv_args(&upscale_c, match upscale_c.as_str() {
                             "anime4k_light" => resolve_upscale_shader("Anime4K_Upscale_DTD_x2.glsl"),
-                            "anime4k_normal" => resolve_upscale_shader("Anime4K_Upscale_Original_x2.glsl"),
+                            "anime4k_normal" => resolve_upscale_shader("Anime4K_Upscale_CNN_x2_M.glsl"),
                             "anime4k_ultra" => resolve_upscale_shader("Anime4K_Upscale_CNN_x2_UL.glsl"),
                             _ => None,
                         }.as_deref()))
@@ -2192,5 +2198,13 @@ mod decide_retry_tests {
         assert!(App::socket_timeout_hit(26, false), "soket hiç gelmedi + 25sn doldu -> vazgeç");
         assert!(!App::socket_timeout_hit(24, false), "henüz süre dolmadı");
         assert!(!App::socket_timeout_hit(600, true), "soket varken zaman aşımı uygulanmaz");
+    }
+
+    #[test]
+    fn anime4k_normal_maps_to_bundled_cnn_shader() {
+        // REGRESYON: 'normal' eski 'Original' (kalite düşüren) mod yerine gerçek
+        // bir CNN upscaler'a bağlı olmalı ve shader bundle edilmiş olmalı.
+        let p = super::resolve_upscale_shader("Anime4K_Upscale_CNN_x2_M.glsl");
+        assert!(p.is_some(), "normal modu için CNN_x2_M shader'ı bundle edilmiş olmalı");
     }
 }
