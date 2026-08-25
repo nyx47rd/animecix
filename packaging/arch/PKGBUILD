@@ -1,15 +1,15 @@
 # Maintainer: nyx47rd <nyx47rd@users.noreply.github.com>
 pkgname=animecix
-pkgver=2.9.3
+pkgver=2.9.4
 pkgrel=1
 pkgdesc="Türkçe anime izleme uygulaması (GTK4/libadwaita + mpv)"
 arch=('x86_64')
-url="https://github.com/nyx47rd/animecix-app"
+url="https://github.com/nyx47rd/animecix"
 license=('MIT')
 depends=('gtk4' 'libadwaita' 'mpv')
 makedepends=('rust' 'cargo' 'git')
-source=("$pkgname-$pkgver.tar.gz::https://github.com/nyx47rd/animecix-app/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('5acc3e868bf0db5bf6079c5ccf7f103e44e1b4a7ca9663839c955a3773fc2d07')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/nyx47rd/animecix/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('9c67b587f2568a3549647a136031f07c3df3668b631484a766b373f0f2e0ed6f')
 options=('!lto')
 
 build() {

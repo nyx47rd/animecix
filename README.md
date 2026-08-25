@@ -56,7 +56,7 @@ kontrol eder ve kendini otomatik güncelleyebilir.
 
 ### AppImage (önerilen)
 
-1. [Releases](https://github.com/nyx47rd/animecix-app/releases) sayfasından `AnimeciX-x86_64.AppImage` dosyasını indirin.
+1. [Releases](https://github.com/nyx47rd/animecix/releases) sayfasından `AnimeciX-x86_64.AppImage` dosyasını indirin.
 2. Çalıştırılabilir yapın ve açın:
 
    ```bash
@@ -78,8 +78,8 @@ Gerekli sistem bağımlılıkları:
 Rust (1.74+) kurulu olmalı:
 
 ```bash
-git clone https://github.com/nyx47rd/animecix-app.git
-cd animecix-app
+git clone https://github.com/nyx47rd/animecix.git
+cd animecix
 cargo build --release
 ./target/release/animecix
 ```

@@ -90,6 +90,6 @@ modules:
       - type: dir
         path: ../..
       - type: file
-        url: https://raw.githubusercontent.com/nyx47rd/animecix-app/v2.9.4/packaging/flatpak/cargo-sources.json
+        url: https://raw.githubusercontent.com/nyx47rd/animecix/v2.9.4/packaging/flatpak/cargo-sources.json
         sha256: b545b18f0e2c60e71d15dccbba82eeaa28127abc130cdf5103ce8c8b2cd34200
         dest-filename: cargo-sources.json

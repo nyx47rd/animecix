@@ -27,19 +27,19 @@
   <launchable type="desktop-id">io.github.nyx47rd.AnimeciX.desktop</launchable>
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/nyx47rd/animecix-app/main/screenshots/home.png</image>
+      <image>https://raw.githubusercontent.com/nyx47rd/animecix/main/screenshots/home.png</image>
       <caption>Ana ekran</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/nyx47rd/animecix-app/main/screenshots/search.png</image>
+      <image>https://raw.githubusercontent.com/nyx47rd/animecix/main/screenshots/search.png</image>
       <caption>Arama</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/nyx47rd/animecix-app/main/screenshots/episodes.png</image>
+      <image>https://raw.githubusercontent.com/nyx47rd/animecix/main/screenshots/episodes.png</image>
       <caption>Bölüm listesi</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/nyx47rd/animecix-app/main/screenshots/marathon.png</image>
+      <image>https://raw.githubusercontent.com/nyx47rd/animecix/main/screenshots/marathon.png</image>
       <caption>Marathon modu</caption>
     </screenshot>
   </screenshots>
@@ -63,6 +63,6 @@
     <content_attribute id="social-chat">mild</content_attribute>
   </content_rating>
   <update_contact>nyx47rd@users.noreply.github.com</update_contact>
-  <url type="homepage">https://github.com/nyx47rd/animecix-app</url>
-  <url type="bugtracker">https://github.com/nyx47rd/animecix-app/issues</url>
+  <url type="homepage">https://github.com/nyx47rd/animecix</url>
+  <url type="bugtracker">https://github.com/nyx47rd/animecix/issues</url>
 </component>

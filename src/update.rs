@@ -7,7 +7,7 @@ use gtk::prelude::*;
 use adw::prelude::*;
 use serde::Deserialize;
 
-const UPDATE_REPO: &str = "nyx47rd/animecix-app";
+const UPDATE_REPO: &str = "nyx47rd/animecix";
 const ASSET_NAME: &str = "AnimeciX-x86_64.AppImage";
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
