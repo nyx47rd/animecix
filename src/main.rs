@@ -12,6 +12,18 @@ use adw::prelude::*;
 use gtk::prelude::*;
 use std::process::Command;
 
+pub fn restart_app() {
+    let exe = std::env::var("APPIMAGE")
+        .map(std::path::PathBuf::from)
+        .ok()
+        .filter(|p| p.is_file())
+        .or_else(|| std::env::current_exe().ok());
+    if let Some(exe) = exe {
+        let _ = std::process::Command::new(exe).spawn();
+        std::process::exit(0);
+    }
+}
+
 fn main() {
     #[cfg(target_os = "linux")]
     unsafe {

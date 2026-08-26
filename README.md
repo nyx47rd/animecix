@@ -128,8 +128,12 @@ alanında çalışır) + [ProtonVPN](https://protonvpn.com) ücretsiz WireGuard 
    ```
    (Config dosya adı tam olarak `config.json` olmalı.)
 3. **Başlat:** Uygulamada **Ayarlar → VPN Proxy → Başlat**'a bas. Durum satırı
-   "Çalışıyor"a dönerse hazırsın. (Terminal severler için elle komut:
-   `~/.local/share/singbox/sing-box run -c ~/.local/share/singbox/config.json &`)
+   "Çalışıyor"a dönerse ve çıkan pencerede **Yeniden Başlat**'a basarsan API trafiği
+   (ana sayfa, arama) de tüneleden geçer — ISS engelleri tamamen aşılır. Yeniden
+   başlatmadan yalnızca video trafiği tüneleden geçer. (Terminal severler için elle
+   komut:
+   `~/.local/share/singbox/sing-box run -c ~/.local/share/singbox/config.json &`
+   — bu durumda da tünel açıldıktan sonra uygulamayı elle yeniden başlat.)
 
 ### Doğrulama
 

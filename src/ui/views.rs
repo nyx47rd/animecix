@@ -509,10 +509,12 @@ impl SettingsView {
                     "VPN Proxy nedir?",
                     "ISS'n (internet sağlayıcı) video trafiğini yavaşlatıp kısıtlıyorsa buradan \
 yerel bir proxy (sing-box + ProtonVPN WireGuard) çalıştırabilirsin.\n\n\
-• Proxy ayakta olduğunda uygulama mpv video trafiğini otomatik olarak \
-127.0.0.1:10808 üzerinden çıkarır; root (yönetici) izni gerekmez.\n\
+• Proxy ayakta olduğunda video trafiği otomatik olarak \
+127.0.0.1:10808 üzerinden çıkar; root (yönetici) izni gerekmez.\n\
+• Başlattıktan sonra çıkan pencerede 'Yeniden Başlat' dersen ana sayfa/arama gibi \
+API istekleri de tünel üzerinden gider (ISS engellerini tamamen aşar).\n\
 • Proxy kapalıyken hiçbir şey değişmez, uygulama normal bağlantını kullanır.\n\
-• Başlat/Durdur ile yönetirsin; kurulum için ilk kez 'Başlat' de, adım adım rehber çıkar.\n\
+• İlk kurulum için 'Başlat'a bas, adım adım rehber çıkar.\n\
 • Proxy kapatılırsa uygulama otomatik normal bağlantıya döner, hiçbir ayarın bozulmaz.",
                 );
             });
@@ -578,11 +580,23 @@ yerel bir proxy (sing-box + ProtonVPN WireGuard) çalıştırabilirsin.\n\n\
                         };
                         match res {
                             Ok(Ok(())) => {
-                                show_info_dialog(
-                                    parent.as_ref(),
-                                    "VPN Proxy",
-                                    "Proxy başlatıldı.\n\nVideo oynatırken mpv trafiği otomatik olarak 127.0.0.1:10808 üzerinden çıkar.",
-                                );
+                                let dlg = adw::MessageDialog::builder()
+                                    .heading("VPN Proxy başlatıldı")
+                                    .body("Video trafiği artık tünel üzerinden çıkıyor.\nAPI isteklerinin (ana sayfa, arama) de tüneleden geçmesi için uygulamayı yeniden başlat.")
+                                    .close_response("later")
+                                    .build();
+                                dlg.add_response("later", "Sonra");
+                                dlg.add_response("restart", "Yeniden Başlat 🔄");
+                                dlg.set_response_appearance("restart", adw::ResponseAppearance::Suggested);
+                                if let Some(w) = parent.as_ref() {
+                                    dlg.set_transient_for(Some(w));
+                                }
+                                dlg.connect_response(None, move |_, resp| {
+                                    if resp == "restart" {
+                                        crate::restart_app();
+                                    }
+                                });
+                                dlg.present();
                             }
                             Ok(Err(e)) => show_info_dialog(parent.as_ref(), "VPN Proxy Hatası", &format!("{e}\n\nLog dosyası: {}", crate::vpn::log_path().display())),
                             Err(_) => show_info_dialog(parent.as_ref(), "VPN Proxy Hatası", "Proxy başlatılırken beklenmeyen bir hata oluştu (süreç çökmüş olabilir)."),
