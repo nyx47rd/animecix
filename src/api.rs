@@ -27,7 +27,7 @@ fn trim_img_cache(map: &mut HashMap<String, (u64, Vec<u8>)>) {
 const CACHE_VERSION: &str = "2";
 
 pub struct Client {
-    http: reqwest::blocking::Client,
+    http: crate::http::Http,
     cache: std::sync::Mutex<HashMap<String, (u64, serde_json::Value)>>,
     bytes: std::sync::Mutex<HashMap<String, (u64, Vec<u8>)>>,
     resolved: std::sync::Mutex<HashMap<String, (u64, String)>>,
@@ -340,16 +340,13 @@ impl Default for Settings {
 
 impl Client {
     pub fn new() -> Self {
-        let http = reqwest::blocking::Client::builder()
-            .user_agent(UA)
-            .redirect(reqwest::redirect::Policy::limited(10))
-            .timeout(std::time::Duration::from_secs(15))
-            .connect_timeout(std::time::Duration::from_secs(3))
-            .pool_max_idle_per_host(16)
-            .pool_idle_timeout(std::time::Duration::from_secs(60))
-            .tcp_keepalive(std::time::Duration::from_secs(60))
-            .build()
-            .expect("http client");
+        let proxy = if crate::vpn::port_alive() {
+            Some(format!("socks5h://127.0.0.1:{}", crate::vpn::PROXY_PORT))
+        } else {
+            None
+        };
+        let http = crate::http::Http::new(proxy.as_deref())
+            .unwrap_or_else(|e| panic!("HTTP istemcisi baslatilamadi: {e}"));
 
         let cache_dir = {
             let mut p = dirs_cache_or_home();
@@ -457,7 +454,7 @@ impl Client {
         &self,
         key: &str,
         ttl: u64,
-        loader: impl FnOnce(&reqwest::blocking::Client) -> Result<serde_json::Value, String>,
+        loader: impl FnOnce(&crate::http::Http) -> Result<serde_json::Value, String>,
     ) -> Result<serde_json::Value, String> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -817,7 +814,7 @@ impl Client {
         let html = self
             .http
             .get(url)
-            .timeout(std::time::Duration::from_secs(4))
+            .timeout(4)
             .send()
             .map_err(|e| format!("sibnet: {e}"))?
             .error_for_status()
@@ -838,7 +835,7 @@ impl Client {
         let html = self
             .http
             .get(url)
-            .timeout(std::time::Duration::from_secs(4))
+            .timeout(4)
             .send()
             .map_err(|e| format!("streamtape: {e}"))?
             .error_for_status()
@@ -874,7 +871,7 @@ impl Client {
             .http
             .get(&url)
             .header("Accept", "application/json")
-            .timeout(std::time::Duration::from_secs(4))
+            .timeout(4)
             .send()
             .map_err(|e| format!("tau api: {e}"))?
             .error_for_status()
@@ -1029,7 +1026,7 @@ impl Client {
                         let size = if mp4.contains("video.sibnet.ru") {
                             0
                         } else {
-                            http.head(&mp4).timeout(std::time::Duration::from_secs(3)).send()
+                            http.head(&mp4).timeout(3).send()
                                 .ok()
                                 .and_then(|r| r.content_length())
                                 .unwrap_or(0)
@@ -1302,7 +1299,7 @@ impl Client {
                 });
                 http.post("https://graphql.anilist.co")
                     .json(&body)
-                    .timeout(std::time::Duration::from_secs(4))
+                    .timeout(4)
                     .send()
                     .map_err(|e| e.to_string())?
                     .json()
@@ -1323,9 +1320,9 @@ impl Client {
 
         let key = format!("aniskip_v4:{mal_id}:{ep_num}");
         let d = match self.cache_get(&key, 6 * 3600, |http| {
-            let fetch = |http: &reqwest::blocking::Client| -> Result<serde_json::Value, String> {
+            let fetch = |http: &crate::http::Http| -> Result<serde_json::Value, String> {
                 http.get(format!("https://api.aniskip.com/v2/skip-times/{mal_id}/{ep_num}?types=op&types=ed&episodeLength=0"))
-                    .timeout(std::time::Duration::from_secs(8))
+                    .timeout(8)
                     .send()
                     .map_err(|e| e.to_string())?
                     .error_for_status()
@@ -1409,7 +1406,7 @@ impl Client {
 
         let t0 = std::time::Instant::now();
         let out = self.http.get(url)
-            .timeout(std::time::Duration::from_secs(12))
+            .timeout(12)
             .send().ok()?.bytes().ok().map(|b| b.to_vec());
         if std::env::var_os("ANIMECIX_BENCH").is_some() {
             let host = url.split('/').nth(2).unwrap_or(url);
@@ -1424,10 +1421,10 @@ impl Client {
     pub fn warmup(&self) {
         let _ = self.http.get(BASE)
             .header("Accept", "application/json")
-            .timeout(std::time::Duration::from_secs(5))
+            .timeout(5)
             .send();
         let _ = self.http.get("https://image.tmdb.org/t/p/w185/")
-            .timeout(std::time::Duration::from_secs(5))
+            .timeout(5)
             .send();
     }
 
@@ -2422,5 +2419,28 @@ mod tests {
         assert!(!pairs.is_empty());
         let first_hint = Client::source_host_hint(&pairs[0].1);
         assert_eq!(first_hint, "sibnet.ru", "tercih edilen host ilk sırada olmalı; gelen: {pairs:?}");
+    }
+}
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn home_lists_live() {
+        let c = Client::new();
+        let cats = c.home_lists().expect("home_lists basarisiz");
+        println!("kategoriler: {}", cats.len());
+        assert!(!cats.is_empty());
+    }
+
+    #[test]
+    #[ignore]
+    fn search_live() {
+        let c = Client::new();
+        let r = c.search("one piece").expect("search basarisiz");
+        println!("sonuc: {}", r.len());
+        assert!(!r.is_empty());
     }
 }

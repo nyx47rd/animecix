@@ -1,6 +1,7 @@
 mod api;
 mod app;
 mod covers;
+mod http;
 mod player;
 mod ui;
 mod update;
