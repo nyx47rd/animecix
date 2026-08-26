@@ -1,4 +1,4 @@
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, mpsc, atomic::{AtomicU8, Ordering}};
 use std::time::Duration;
 
 enum Method {
@@ -23,11 +23,13 @@ struct RawResp {
     body: Vec<u8>,
 }
 
-type Job = Box<dyn FnOnce(&wreq::Client, &tokio::runtime::Runtime) + Send>;
+type Job = Box<dyn FnOnce(&tokio::runtime::Runtime) + Send>;
 
 struct Inner {
-    client: wreq::Client,
+    primary: wreq::Client,
+    fallback: Option<wreq::Client>,
     tx: mpsc::Sender<Job>,
+    last_good: AtomicU8,
 }
 
 #[derive(Clone)]
@@ -102,9 +104,10 @@ impl ReqB<'_> {
     pub fn send(self) -> Result<Resp, String> {
         let (tx, rx) = mpsc::channel::<Result<RawResp, String>>();
         let inner = self.http.inner.clone();
+        let job_inner = inner.clone();
         let spec = self.spec;
-        let job: Job = Box::new(move |client, rt| {
-            let _ = tx.send(exec_on(client, rt, spec));
+        let job: Job = Box::new(move |rt| {
+            let _ = tx.send(exec_cascade(rt, &job_inner, &spec));
         });
         inner
             .tx
@@ -114,10 +117,9 @@ impl ReqB<'_> {
             .map_err(|_| "HTTP arka plan iş parçacığı kapandı".to_string())?
             .map(|raw| Resp { raw })
     }
-
 }
 
-fn exec_on(client: &wreq::Client, rt: &tokio::runtime::Runtime, spec: Spec) -> Result<RawResp, String> {
+fn exec_on(rt: &tokio::runtime::Runtime, client: &wreq::Client, spec: &Spec) -> Result<RawResp, String> {
     let mut url = spec.url.clone();
     if let Some(q) = &spec.query {
         if !q.is_empty() {
@@ -158,19 +160,61 @@ fn exec_on(client: &wreq::Client, rt: &tokio::runtime::Runtime, spec: Spec) -> R
     })
 }
 
-impl Http {
-    pub fn new(proxy: Option<&str>) -> Result<Self, String> {
-        let mut b = wreq::Client::builder()
-            .emulation(wreq_util::Emulation::Chrome149)
-            .timeout(Duration::from_secs(15))
-            .connect_timeout(Duration::from_secs(5));
-        if let Some(p) = proxy {
-            let pr = wreq::Proxy::all(p).map_err(|e| e.to_string())?;
-            b = b.proxy(pr);
+fn exec_cascade(rt: &tokio::runtime::Runtime, inner: &Inner, spec: &Spec) -> Result<RawResp, String> {
+    let order: [(u8, &wreq::Client); 2] = if inner.last_good.load(Ordering::Relaxed) == 1 && inner.fallback.is_some() {
+        [(1, inner.fallback.as_ref().unwrap()), (0, &inner.primary)]
+    } else {
+        [(0, &inner.primary), (1, inner.fallback.as_ref().unwrap_or(&inner.primary))]
+    };
+
+    let mut last: Option<Result<RawResp, String>> = None;
+    for (idx, client) in order.iter().take(if inner.fallback.is_some() { 2 } else { 1 }) {
+        let res = exec_on(rt, client, &spec);
+        match &res {
+            Ok(r) if r.status != 403 => {
+                inner.last_good.store(*idx, Ordering::Relaxed);
+                return res;
+            }
+            _ => last = Some(res),
         }
-        let client = b.build().map_err(|e| e.to_string())?;
+    }
+    last.unwrap_or_else(|| Err("yol yok".into()))
+}
+
+fn pct_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'%' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
+}
+
+impl Http {
+    pub fn new(tunnel_proxy: Option<&str>) -> Result<Self, String> {
+        let mk = |proxy: Option<&str>| -> Result<wreq::Client, String> {
+            let mut b = wreq::Client::builder()
+                .emulation(wreq_util::Emulation::Chrome149)
+                .timeout(Duration::from_secs(15))
+                .connect_timeout(Duration::from_secs(5));
+            if let Some(p) = proxy {
+                let pr = wreq::Proxy::all(p).map_err(|e| e.to_string())?;
+                b = b.proxy(pr);
+            }
+            b.build().map_err(|e| e.to_string())
+        };
+        let primary = mk(None)?;
+        let fallback = match tunnel_proxy {
+            Some(_) => Some(mk(tunnel_proxy)?),
+            None => None,
+        };
         let (tx, rx) = mpsc::channel::<Job>();
-        let thread_client = client.clone();
+        let rt_primary = primary.clone();
+        let rt_fallback = fallback.clone();
         std::thread::Builder::new()
             .name("http".into())
             .spawn(move || {
@@ -179,12 +223,17 @@ impl Http {
                     .build()
                     .expect("tokio runtime");
                 for job in rx {
-                    job(&thread_client, &rt);
+                    job(&rt);
                 }
             })
             .map_err(|e| e.to_string())?;
         Ok(Self {
-            inner: Arc::new(Inner { client, tx }),
+            inner: Arc::new(Inner {
+                primary: rt_primary,
+                fallback: rt_fallback,
+                tx,
+                last_good: AtomicU8::new(0),
+            }),
         })
     }
 
@@ -229,18 +278,4 @@ impl Http {
             },
         }
     }
-}
-
-
-fn pct_encode(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'%' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{:02X}", b)),
-        }
-    }
-    out
 }
