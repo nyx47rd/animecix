@@ -631,22 +631,22 @@ API istekleri de tünel üzerinden gider (ISS engellerini tamamen aşar).\n\
         let upscale_model = gtk::StringList::new(&[
             "Kapalı",
             "Keskinleştir",
-            "Anime4K (hafif)",
-            "Anime4K (normal)",
-            "Anime4K (ultra)",
+            "Hafif",
+            "Ultra",
+            "Hafif + Keskinleştirme",
         ]);
         upscale_row.set_model(Some(&upscale_model));
         upscale_row.set_selected(match settings.upscale.as_str() {
-            "anime4k_ultra" => 4,
-            "anime4k_normal" => 3,
-            "anime4k_light" | "anime4k" => 2,
+            "hafif_keskin" => 4,
+            "ultra" => 3,
+            "hafif" => 2,
             "sharp" => 1,
             _ => 0,
         });
         img_group.add(&upscale_row);
 
         let upscale_desc = gtk::Label::new(Some(
-            "Yalnızca kaynak çözünürlüğü ekrandan küçükse etki eder. Anime4K: hafif (DTD, iGPU dostu) / normal (CNN orta) / ultra (CNN, en kaliteli).",
+            "Yalnızca kaynak çözünürlüğü ekrandan küçükse etki eder.\nHafif: DTD (iGPU dostu, hafif). Ultra: CNN (en kaliteli). Hafif + Keskinleştirme: DTD + keskinleştirme filtresi.",
         ));
         upscale_desc.set_wrap(true);
         upscale_desc.set_xalign(0.0);
@@ -740,9 +740,9 @@ API istekleri de tünel üzerinden gider (ISS engellerini tamamen aşar).\n\
                 updated.notify_uptodate = notify_r.is_active();
                 updated.upscale = match up_r.selected() {
                     1 => "sharp".into(),
-                    2 => "anime4k_light".into(),
-                    3 => "anime4k_normal".into(),
-                    4 => "anime4k_ultra".into(),
+                    2 => "hafif".into(),
+                    3 => "ultra".into(),
+                    4 => "hafif_keskin".into(),
                     _ => "off".into(),
                 };
                 updated.light_mode = light_r.is_active();

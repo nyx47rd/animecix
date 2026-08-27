@@ -1904,9 +1904,9 @@ impl App {
                         .arg("--hwdec=auto-safe")
                         .arg("--ytdl-format=bestvideo[height<=1080]+bestaudio/best")
                         .args(crate::api::upscale_mpv_args(&upscale_c, match upscale_c.as_str() {
-                            "anime4k_light" => resolve_upscale_shader("Anime4K_Upscale_DTD_x2.glsl"),
-                            "anime4k_normal" => resolve_upscale_shader("Anime4K_Upscale_CNN_x2_M.glsl"),
-                            "anime4k_ultra" => resolve_upscale_shader("Anime4K_Upscale_CNN_x2_UL.glsl"),
+                            "hafif" => resolve_upscale_shader("Anime4K_Upscale_DTD_x2.glsl"),
+                            "ultra" => resolve_upscale_shader("Anime4K_Upscale_CNN_x2_UL.glsl"),
+                            "hafif_keskin" => resolve_upscale_shader("Anime4K_Upscale_DTD_x2.glsl"),
                             _ => None,
                         }.as_deref()))
                         .arg(url.as_str());

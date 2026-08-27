@@ -303,7 +303,7 @@ fn default_quick_search() -> bool { true }
 fn default_shortcut() -> String { "/".into() }
 fn default_search_shortcut() -> String { "Ctrl+S".into() }
 fn default_true() -> bool { true }
-fn default_upscale() -> String { "sharp".into() }
+fn default_upscale() -> String { "hafif".into() }
 fn default_patience() -> u64 { 20 }
 
 pub(crate) fn upscale_mpv_args(upscale: &str, shader_path: Option<&str>) -> Vec<String> {
@@ -312,9 +312,20 @@ pub(crate) fn upscale_mpv_args(upscale: &str, shader_path: Option<&str>) -> Vec<
             "--scale=ewa_lanczossharp".into(),
             "--cscale=ewa_lanczossharp".into(),
         ],
-        s if s.starts_with("anime4k") => match shader_path {
+        "hafif" => match shader_path {
             Some(p) => vec![format!("--glsl-shaders={p}")],
             None => Vec::new(),
+        },
+        "ultra" => match shader_path {
+            Some(p) => vec![format!("--glsl-shaders={p}")],
+            None => Vec::new(),
+        },
+        "hafif_keskin" => match shader_path {
+            Some(p) => vec![
+                format!("--glsl-shaders={p}"),
+                "--vf=unsharp=5:5:1.0:5:5:0.4".into(),
+            ],
+            None => vec!["--vf=unsharp=5:5:1.0:5:5:0.4".into()],
         },
         _ => Vec::new(),
     }
@@ -2116,11 +2127,17 @@ mod tests {
         assert!(sharp.iter().any(|a| a == "--scale=ewa_lanczossharp"));
         assert!(sharp.iter().any(|a| a == "--cscale=ewa_lanczossharp"));
         assert!(!sharp.iter().any(|a| a.contains("dsharpen")));
-        assert!(super::upscale_mpv_args("anime4k_light", None).is_empty());
-        assert!(super::upscale_mpv_args("anime4k_normal", None).is_empty());
-        assert!(super::upscale_mpv_args("anime4k_ultra", None).is_empty());
-        let ak = super::upscale_mpv_args("anime4k_ultra", Some("/p/Anime4K.glsl"));
+        assert!(super::upscale_mpv_args("hafif", None).is_empty());
+        assert!(super::upscale_mpv_args("ultra", None).is_empty());
+        let hk_none = super::upscale_mpv_args("hafif_keskin", None);
+        assert!(hk_none.iter().any(|a| a.starts_with("--vf=unsharp")));
+        let ak = super::upscale_mpv_args("ultra", Some("/p/Anime4K.glsl"));
         assert_eq!(ak, vec!["--glsl-shaders=/p/Anime4K.glsl".to_string()]);
+        let ak2 = super::upscale_mpv_args("hafif", Some("/p/Anime4K.glsl"));
+        assert_eq!(ak2, vec!["--glsl-shaders=/p/Anime4K.glsl".to_string()]);
+        let ak3 = super::upscale_mpv_args("hafif_keskin", Some("/p/Anime4K.glsl"));
+        assert!(ak3.iter().any(|a| a == "--glsl-shaders=/p/Anime4K.glsl"));
+        assert!(ak3.iter().any(|a| a.starts_with("--vf=unsharp")));
     }
 
     #[test]
