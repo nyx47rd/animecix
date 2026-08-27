@@ -1609,24 +1609,42 @@ impl App {
 
     fn play_with_fansub(&self, title: &Title, ep: &Episode, fs: &api::FansubInfo) {
         eprintln!(
-            "[PLAY-FS] {} S{:02}E{:02} → {} (template {}, {:.2}★, {} mirror)",
-            title.name, ep.season, ep.episode, fs.name, fs.template_id, fs.rating, fs.mirror_count
+            "[PLAY-FS] {} S{:02}E{:02} → {} ({:.2}★, {} mirror)",
+            title.name, ep.season, ep.episode, fs.name, fs.rating, fs.mirror_count
         );
         let mirror_urls: Vec<String> = fs.mirrors.iter().map(|m| m.url.clone()).collect();
         let title_c = title.clone();
         let ep_c = ep.clone();
         let client = self.client.clone();
+        self.busy(true);
         self.spawn(move |_| {
-            let res = client
-                .resolve_urls(&mirror_urls, 3)
-                .and_then(|fast_pairs| {
-                    let mut fb = client.episode_candidates(title_c.id, ep_c.episode, ep_c.season)?;
+            let fs_result = client.resolve_urls(&mirror_urls, mirror_urls.len().max(1));
+            let res = match fs_result {
+                Ok(fast_pairs) if !fast_pairs.is_empty() => {
+                    let mut fb = client.episode_candidates(title_c.id, ep_c.episode, ep_c.season).unwrap_or_default();
                     let tried = 3.min(fb.len());
                     fb.drain(..tried);
                     let fast: Vec<String> = fast_pairs.iter().map(|(m, _)| m.clone()).collect();
                     let fast_emb: Vec<String> = fast_pairs.iter().map(|(_, e)| e.clone()).collect();
                     Ok((fast, fast_emb, fb))
-                });
+                }
+                _ => {
+                    eprintln!("[PLAY-FS] fansub mirror'ları çözülemedi, tüm bölüm kaynakları deneniyor");
+                    let pref = client.get_preferred_host(title_c.id);
+                    client
+                        .resolve_top(title_c.id, ep_c.episode, ep_c.season, 3, pref.as_deref())
+                        .and_then(|fast_pairs| {
+                            let mut fb = client
+                                .episode_candidates(title_c.id, ep_c.episode, ep_c.season)
+                                .unwrap_or_default();
+                            let tried = 3.min(fb.len());
+                            fb.drain(..tried);
+                            let fast: Vec<String> = fast_pairs.iter().map(|(m, _)| m.clone()).collect();
+                            let fast_emb: Vec<String> = fast_pairs.iter().map(|(_, e)| e.clone()).collect();
+                            Ok((fast, fast_emb, fb))
+                        })
+                }
+            };
             move || Msg::Play(title_c, ep_c, res)
         });
     }

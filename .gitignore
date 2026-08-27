@@ -1,6 +1,8 @@
 /target
 *.log
 state.json
+squashfs-root/
+/tmp
 
 # === Build artefaktları (GitHub'a gönderilmez) ===
 *.AppImage

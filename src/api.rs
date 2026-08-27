@@ -1053,28 +1053,29 @@ impl Client {
         let videos = d["videos"].as_array().cloned().unwrap_or_default();
         let points = &d["translatorPoints"];
 
-        let mut groups: std::collections::BTreeMap<i64, (f64, i64, String, bool, Vec<serde_json::Value>)> =
+        let mut groups: std::collections::BTreeMap<String, (f64, i64, bool, Vec<serde_json::Value>)> =
             std::collections::BTreeMap::new();
         for v in &videos {
+            let raw_extra = v["extra"].as_str().unwrap_or("").trim().to_string();
+            let fansub_name = clean_fansub_name(&raw_extra);
+            let approved = v["approved"].as_bool().unwrap_or(false);
             let tpl = v["template"].as_i64().unwrap_or(0);
             let point = points[tpl.to_string()].as_f64().unwrap_or(0.0);
             let votes = v["positive_votes"].as_i64().unwrap_or(0);
-            let extra = v["extra"].as_str().unwrap_or("").trim().to_string();
-            let approved = v["approved"].as_bool().unwrap_or(false);
-            let g = groups.entry(tpl).or_insert((point, 0, String::new(), true, Vec::new()));
+            let g = groups.entry(fansub_name).or_insert((0.0, 0, true, Vec::new()));
+            if point > g.0 {
+                g.0 = point;
+            }
             g.1 += votes;
-            if extra.len() > g.2.len() {
-                g.2 = extra;
-            }
             if !approved {
-                g.3 = false;
+                g.2 = false;
             }
-            g.4.push(v.clone());
+            g.3.push(v.clone());
         }
 
         let mut out: Vec<FansubInfo> = groups
             .into_iter()
-            .map(|(tpl, (rating, total_votes, raw_name, approved_only, mut vids))| {
+            .map(|(name, (rating, total_votes, approved_only, mut vids))| {
                 vids.sort_by(|a, b| {
                     let ta = a["url"].as_str().unwrap_or("").contains("tau-video.xyz");
                     let tb = b["url"].as_str().unwrap_or("").contains("tau-video.xyz");
@@ -1100,8 +1101,8 @@ impl Client {
                     .collect();
                 let hosts: Vec<String> = mirrors.iter().map(|m| m.host.clone()).collect();
                 FansubInfo {
-                    template_id: tpl,
-                    name: clean_fansub_name(&raw_name),
+                    template_id: 0,
+                    name,
                     rating,
                     total_votes,
                     language,
@@ -1118,6 +1119,7 @@ impl Client {
                 .cmp(&a.approved_only)
                 .then_with(|| b.rating.partial_cmp(&a.rating).unwrap_or(std::cmp::Ordering::Equal))
                 .then_with(|| b.total_votes.cmp(&a.total_votes))
+                .then_with(|| a.name.cmp(&b.name))
         });
         Ok(out)
     }
@@ -2599,21 +2601,28 @@ pub(crate) fn clean_fansub_name(raw: &str) -> String {
     if s.is_empty() {
         return "Bilinmeyen".to_string();
     }
-    if let Some(pos) = s.find("Çevirmen:") {
-        let after = s[pos + "Çevirmen:".len()..].trim();
-        let cleaned = after.split('|').next().unwrap_or("").trim();
-        if !cleaned.is_empty() {
-            return cleaned.to_string();
-        }
+
+    let stripped = s
+        .strip_prefix("Çevirmen:")
+        .or_else(|| s.strip_prefix("Çeviri:"))
+        .or_else(|| s.strip_prefix("Encoder:"))
+        .unwrap_or(s)
+        .trim();
+
+    let pipe_end = stripped.find('|').unwrap_or(stripped.len());
+    let part = &stripped[..pipe_end];
+
+    let lower = part.to_lowercase();
+    let cut = lower
+        .find("redakte")
+        .or_else(|| lower.find("encoder"))
+        .unwrap_or(part.len());
+    let name = part[..cut].trim();
+    if name.is_empty() {
+        part.trim().to_string()
+    } else {
+        name.to_string()
     }
-    if let Some(pos) = s.find("Encoder:") {
-        let after = s[pos + "Encoder:".len()..].trim();
-        let cleaned = after.split('|').next().unwrap_or("").trim();
-        if !cleaned.is_empty() {
-            return cleaned.to_string();
-        }
-    }
-    s.to_string()
 }
 
 #[cfg(test)]
@@ -2635,5 +2644,23 @@ mod fansub_tests {
     fn handles_empty() {
         assert_eq!(clean_fansub_name(""), "Bilinmeyen");
         assert_eq!(clean_fansub_name("   "), "Bilinmeyen");
+    }
+
+    #[test]
+    fn cleans_ceviriri_prefix() {
+        assert_eq!(clean_fansub_name("Çeviri: xerneas"), "xerneas");
+    }
+
+    #[test]
+    fn cleans_redakte_suffix() {
+        assert_eq!(
+            clean_fansub_name("Çeviri: xerneas Redakte: Shauna Encoded: y"),
+            "xerneas"
+        );
+    }
+
+    #[test]
+    fn cleans_multiple_prefixes() {
+        assert_eq!(clean_fansub_name("Encoder: Wolwead | Sürüm: 2"), "Wolwead");
     }
 }
