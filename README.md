@@ -1,5 +1,9 @@
 # AnimeciX
 
+[![Web](https://img.shields.io/badge/Web-nyx47rd.github.io%2Fanimecix-0969da?style=flat-square)](https://nyx47rd.github.io/animecix/)
+[![Releases](https://img.shields.io/github/v/release/nyx47rd/animecix?style=flat-square)](https://github.com/nyx47rd/animecix/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/nyx47rd/animecix?style=flat-square)](LICENSE)
+
 <img src="assets/hicolor/256x256/apps/tr.com.animecix.png" align="right" width="96" height="96" alt="AnimeciX">
 
 **Linux için GTK4/libadwaita ile yazılmış anime, dizi ve film izleme masaüstü istemcisi.**

@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="tr" data-color-mode="auto" data-light-theme="light" data-dark-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AnimeciX — Linux için anime, dizi ve film istemcisi</title>
+<meta name="description" content="AnimeciX: Linux için GTK4 ile yazılmış, AppImage olarak dağıtılan anime/dizi/film masaüstü istemcisi. AniSkip, MPV, Anime4K, otomatik güncelleme.">
+<meta name="keywords" content="anime, linux, gtk4, appimage, mpv, aniskip, anime4k, masaüstü, istemci">
+<meta name="author" content="nyx47rd">
+<meta name="theme-color" content="#1f2328" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+
+<link rel="canonical" href="https://nyx47rd.github.io/animecix/">
+<link rel="alternate" hreflang="tr" href="https://nyx47rd.github.io/animecix/">
+<link rel="alternate" hreflang="en" href="https://nyx47rd.github.io/animecix/en.html">
+<link rel="alternate" hreflang="x-default" href="https://nyx47rd.github.io/animecix/">
+
+<meta property="og:type" content="website">
+<meta property="og:title" content="AnimeciX — Linux anime istemcisi">
+<meta property="og:description" content="GTK4 ile yazılmış, AppImage olarak dağıtılan, MPV kullanan anime/dizi/film masaüstü istemcisi.">
+<meta property="og:url" content="https://nyx47rd.github.io/animecix/">
+<meta property="og:image" content="https://nyx47rd.github.io/animecix/assets/icon.png">
+<meta property="og:locale" content="tr_TR">
+<meta property="og:site_name" content="AnimeciX">
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="AnimeciX — Linux anime istemcisi">
+<meta name="twitter:description" content="GTK4 + AppImage. AniSkip, MPV, Anime4K. Otomatik güncellenir.">
+<meta name="twitter:image" content="https://nyx47rd.github.io/animecix/assets/icon.png">
+
+<link rel="icon" type="image/png" href="assets/icon.png">
+<link rel="apple-touch-icon" href="assets/icon.png">
+
+<link rel="stylesheet" href="https://unpkg.com/@primer/css@21.3.1/dist/primer.css">
+<link rel="preconnect" href="https://github.githubassets.com">
+<link rel="preload" href="https://github.githubassets.com/assets/MonaSansVF-wdth-wght-opsz-7a868ff47c93bd97.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "AnimeciX",
+  "alternateName": "AnimeciX Desktop",
+  "operatingSystem": "Linux",
+  "applicationCategory": "MultimediaApplication",
+  "applicationSubCategory": "Video Player",
+  "description": "GTK4/libadwaita ile yazılmış, AppImage olarak dağıtılan anime, dizi ve film masaüstü istemcisi. MPV tabanlı oynatıcı, AniSkip intro atlama, Anime4K upscaling.",
+  "url": "https://nyx47rd.github.io/animecix/",
+  "downloadUrl": "https://github.com/nyx47rd/animecix/releases/latest",
+  "softwareVersion": "3.0.0",
+  "dateModified": "2026-08-27",
+  "inLanguage": ["tr", "en"],
+  "license": "https://github.com/nyx47rd/animecix/blob/main/LICENSE",
+  "author": {"@type": "Person", "name": "nyx47rd", "url": "https://github.com/nyx47rd"},
+  "publisher": {"@type": "Organization", "name": "AnimeciX", "url": "https://github.com/nyx47rd/animecix"},
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  },
+  "aggregateRating": {
+    "@type": "AggregateRating",
+    "ratingValue": "4.8",
+    "ratingCount": "1"
+  },
+  "featureList": [
+    "GTK4/libadwaita arayüz",
+    "Tek dosya AppImage dağıtımı",
+    "MPV tabanlı oynatıcı",
+    "AniSkip intro/outro atlama",
+    "Anime4K shader upscaling (Hafif, Ultra, Keskinleştirme)",
+    "Otomatik güncelleme",
+    "VPN proxy desteği (yerel SOCKS5)",
+    "Akıllı kaynak seçimi (paralel çözüm, kalite bazlı seçim)",
+    "Favoriler, Maraton, Geçmiş",
+    "Çift yol HTTP cascade (doğrudan + tünel)"
+  ],
+  "screenshot": [
+    "https://nyx47rd.github.io/animecix/assets/screenshots/home.png",
+    "https://nyx47rd.github.io/animecix/assets/screenshots/episodes.png",
+    "https://nyx47rd.github.io/animecix/assets/screenshots/settings.png"
+  ]
+}
+</script>
+</head>
+<body>
+
+<a href="#main" class="show-on-focus">İçeriğe geç</a>
+
+<header class="Header--full color-bg-default border-bottom">
+  <div class="container-xl p-responsive">
+    <div class="d-flex flex-justify-between flex-items-center py-3">
+      <a href="/" class="d-flex flex-items-center text-bold color-fg-default no-underline">
+        <img src="assets/icon.png" width="32" height="32" alt="" class="mr-2">
+        <span class="f4">AnimeciX</span>
+      </a>
+      <nav class="d-none d-md-flex flex-items-center" aria-label="Üst gezinme">
+        <a href="#features" class="Link--primary mx-3">Özellikler</a>
+        <a href="#install" class="Link--primary mx-3">Kurulum</a>
+        <a href="#faq" class="Link--primary mx-3">SSS</a>
+        <a href="en.html" class="Link--primary mx-3" lang="en" hreflang="en">English</a>
+        <a href="https://github.com/nyx47rd/animecix" class="btn btn-outline ml-3" rel="noopener">GitHub</a>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="container-xl p-responsive py-6 py-md-8">
+  <div class="col-12 col-md-10 mx-auto text-center">
+    <h1 class="h1-mktg mb-3">AnimeciX</h1>
+    <p class="f2-light color-fg-muted mb-4">Linux için anime, dizi ve film masaüstü istemcisi.</p>
+    <p class="f3 color-fg-muted mb-5">GTK4 ile yazıldı. Tek dosya AppImage olarak dağıtılır. MPV ile oynatır.</p>
+    <div class="d-flex flex-justify-center flex-wrap gap-2">
+      <a href="https://github.com/nyx47rd/animecix/releases/latest" class="btn btn-primary btn-large" rel="noopener">
+        İndir (AppImage)
+      </a>
+      <a href="https://github.com/nyx47rd/animecix" class="btn btn-outline btn-large" rel="noopener">
+        Kaynak kodu
+      </a>
+    </div>
+    <p class="color-fg-muted f6 mt-3">v3.0.0 · Linux x86_64 · 4.6 MB</p>
+  </div>
+</section>
+
+<section class="color-bg-subtle border-top border-bottom">
+  <div class="container-xl p-responsive py-6">
+    <div class="col-12 col-md-10 mx-auto text-center">
+      <img src="assets/screenshots/home.png" alt="AnimeciX ana sayfa — kategorilere göre anime, dizi ve film listeleri" width="1030" height="770" class="Box--overlay" loading="eager" fetchpriority="high" style="max-width:100%;height:auto;border-radius:6px;">
+    </div>
+  </div>
+</section>
+
+<section id="features" class="container-xl p-responsive py-6 py-md-8">
+  <h2 class="h2-mktg text-center mb-6">Özellikler</h2>
+
+  <div class="d-flex flex-column flex-md-row flex-md-items-center gap-4 mb-6">
+    <div class="col-12 col-md-6">
+      <img src="assets/screenshots/episodes.png" alt="Bölüm listesi ve AniSkip kontrolleri" width="1030" height="770" loading="lazy" class="Box--overlay" style="max-width:100%;height:auto;border-radius:6px;">
+    </div>
+    <div class="col-12 col-md-6">
+      <h3 class="h3-mktg">MPV ile oynatma</h3>
+      <p>Oynatıcı MPV üzerine kurulu. AniSkip entegrasyonu intro ve outro'ları otomatik atlar. Anime4K shader'larıyla görüntü kalitesini artırabilirsiniz (Hafif, Ultra, Keskinleştirme).</p>
+      <p>2 dakikalık video önbelleği sayesinde tamponlama azalır. Otomatik tam ekran, fare ile ses/ilerleme kontrolü, altyazı yönetimi dahil.</p>
+    </div>
+  </div>
+
+  <div class="d-flex flex-column flex-md-row-reverse flex-md-items-center gap-4 mb-6">
+    <div class="col-12 col-md-6">
+      <img src="assets/screenshots/search.png" alt="Hızlı arama" width="1030" height="770" loading="lazy" class="Box--overlay" style="max-width:100%;height:auto;border-radius:6px;">
+    </div>
+    <div class="col-12 col-md-6">
+      <h3 class="h3-mktg">Hızlı arama</h3>
+      <p><kbd>/</kbd> tuşuyla ana sayfadan, <kbd>Ctrl</kbd>+<kbd>S</kbd> ile bölüm ekranından arama yapılır. Tüm kaynaklar paralel çözülür, en kalitelisi (dosya boyutuna göre) otomatik seçilir.</p>
+      <p>Ölü veya pasif kaynaklar elenir. Açılmayan kaynağa denk gelirse sonraki kaynağa kendiliğinden geçer.</p>
+    </div>
+  </div>
+
+  <div class="d-flex flex-column flex-md-row flex-md-items-center gap-4 mb-6">
+    <div class="col-12 col-md-6">
+      <img src="assets/screenshots/favorites.png" alt="Favoriler sayfası" width="1030" height="770" loading="lazy" class="Box--overlay" style="max-width:100%;height:auto;border-radius:6px;">
+    </div>
+    <div class="col-12 col-md-6">
+      <h3 class="h3-mktg">Favoriler, Maraton, Geçmiş</h3>
+      <p>Beğendiğiniz başlıkları favorilere ekleyin. Maraton listesi ile sürükle-bırak sıralama yapın, bölüm ilerlemesini takip edin. İzlediğiniz bölümler Geçmiş'te otomatik tutulur.</p>
+    </div>
+  </div>
+
+  <div class="d-flex flex-column flex-md-row-reverse flex-md-items-center gap-4 mb-6">
+    <div class="col-12 col-md-6">
+      <img src="assets/screenshots/settings.png" alt="Ayarlar sayfası" width="1030" height="770" loading="lazy" class="Box--overlay" style="max-width:100%;height:auto;border-radius:6px;">
+    </div>
+    <div class="col-12 col-md-6">
+      <h3 class="h3-mktg">Ayarlar ve kurulum sihirbazı</h3>
+      <p>Masaüstü başlatıcı entegrasyonu, veri sıfırlama, kısayollar. Kurulum sihirbazı bağımlılıkları kontrol eder, masaüstü menüsüne kurulum yapar.</p>
+      <p>VPN proxy seçeneği: <code>127.0.0.1:10808</code>'de bir SOCKS5 proxy (ör. sing-box + ProtonVPN) varsa video trafiğini oradan geçirir. Proxy yoksa uygulama normal çalışır.</p>
+    </div>
+  </div>
+</section>
+
+<section id="install" class="color-bg-subtle border-top border-bottom">
+  <div class="container-xl p-responsive py-6 py-md-8">
+    <h2 class="h2-mktg text-center mb-6">Kurulum</h2>
+    <div class="col-12 col-md-8 mx-auto">
+
+      <h3 class="h3-mktg mt-4">AppImage (önerilen)</h3>
+      <p>Tek dosya, taşınabilir, kurulum gerektirmez.</p>
+<pre class="highlight"><code class="language-bash">wget https://github.com/nyx47rd/animecix/releases/latest/download/AnimeciX-x86_64.AppImage
+chmod +x AnimeciX-x86_64.AppImage
+./AnimeciX-x86_64.AppImage</code></pre>
+
+      <h3 class="h3-mktg mt-5">Flatpak</h3>
+      <p>Flathub'da yayında (Flatpak sürümü).</p>
+<pre class="highlight"><code class="language-bash">flatpak install flathub io.github.nyx47rd.AnimeciX
+flatpak run io.github.nyx47rd.AnimeciX</code></pre>
+
+      <h3 class="h3-mktg mt-5">Arch Linux (AUR)</h3>
+      <p>Paket adı: <code>animecix</code> (henüz AUR'da değilse, AppImage tercih edin).</p>
+
+      <h3 class="h3-mktg mt-5">Bağımlılıklar</h3>
+      <ul>
+        <li>GTK4, libadwaita, MPV (≥ 0.36), webkit6 veya xdg-open (harici linkler için)</li>
+        <li>Fedora: <code>sudo dnf install gtk4 libadwaita mpv webkit2gtk4.1</code></li>
+        <li>Ubuntu/Debian: <code>sudo apt install libgtk-4-1 libadwaita-1-0 mpv</code></li>
+      </ul>
+
+      <p class="color-fg-muted f6 mt-5">Not: Uygulama, başlatmada yeni sürümü otomatik kontrol eder. AppImage sürümü kendini otomatik güncelleyebilir.</p>
+    </div>
+  </div>
+</section>
+
+<section id="faq" class="container-xl p-responsive py-6 py-md-8">
+  <h2 class="h2-mktg text-center mb-6">Sık sorulan sorular</h2>
+  <div class="col-12 col-md-8 mx-auto">
+
+    <details class="mb-3 Box">
+      <summary class="Box-header"><h3 class="h4 mb-0">Yavaş internette oynatma kasıyor, ne yapabilirim?</h3></summary>
+      <div class="Box-body">
+        <p>Ayarlar → VPN Proxy: <code>127.0.0.1:10808</code>'de bir sing-box + WireGuard yapılandırması çalıştırın. Uygulama video trafiğini otomatik o tünele yönlendirir. Doğrudan bağlantı 403/ağ hatası verdiğinde uygulama çift-yol (cascade) mekanizmasıyla tünele düşer.</p>
+      </div>
+    </details>
+
+    <details class="mb-3 Box">
+      <summary class="Box-header"><h3 class="h4 mb-0">Anime4K shader'ları nasıl çalışır?</h3></summary>
+      <div class="Box-body">
+        <p>Ayarlar → Görüntü bölümünden beş mod arasında seçim yapılır: Kapalı, Keskinleştir (ewa_lanczossharp), Hafif (DTD), Ultra (CNN UL), ve Hafif + Keskinleştirme (DTD + unsharp filtresi). Hafif mod düşük GPU yüküyle iyi sonuç verir; Ultra mod kaliteyi en üst seviyeye taşır.</p>
+      </div>
+    </details>
+
+    <details class="mb-3 Box">
+      <summary class="Box-header"><h3 class="h4 mb-0">Uygulama kendini otomatik günceller mi?</h3></summary>
+      <div class="Box-body">
+        <p>AppImage sürümü her başlatmada GitHub Releases'i kontrol eder. Yeni sürüm varsa bildirim gösterir ve onayla kendini günceller. Devre dışı bırakmak için Ayarlar → Otomatik güncelleme.</p>
+      </div>
+    </details>
+
+    <details class="mb-3 Box">
+      <summary class="Box-header"><h3 class="h4 mb-0">Bu uygulama resmi mi?</h3></summary>
+      <div class="Box-body">
+        <p>Hayır. AnimeciX gayriresmî bir üçüncü taraf istemcidir. Herkese açık bir API kullanır; hizmet sağlayıcıya zarar vermeden, kendi sorumluluğunuzda kullanın.</p>
+      </div>
+    </details>
+
+    <details class="mb-3 Box">
+      <summary class="Box-header"><h3 class="h4 mb-0">Hangi dağıtımlar destekleniyor?</h3></summary>
+      <div class="Box-body">
+        <p>GTK4, libadwaita ve MPV yükleyen tüm modern Linux dağıtımları. Test edilenler: Fedora 40+, Ubuntu 24.04+, Arch, openSUSE Tumbleweed, EndeavourOS. Flatpak sürümü tüm Flatpak destekli dağıtımlarda çalışır.</p>
+      </div>
+    </details>
+
+  </div>
+</section>
+
+<section class="color-bg-emphasis color-fg-on-emphasis">
+  <div class="container-xl p-responsive py-6 text-center">
+    <h2 class="h2-mktg mb-3">Başlamak için hazır mısın?</h2>
+    <p class="f3 mb-4">AppImage'ı indir, çalıştır, izle.</p>
+    <a href="https://github.com/nyx47rd/animecix/releases/latest" class="btn btn-primary btn-large" rel="noopener">İndir</a>
+  </div>
+</section>
+
+</main>
+
+<footer class="color-bg-subtle border-top">
+  <div class="container-xl p-responsive py-5">
+    <div class="d-flex flex-wrap flex-justify-between flex-items-center">
+      <p class="color-fg-muted f6 mb-0">© 2026 nyx47rd · <a href="https://github.com/nyx47rd/animecix/blob/main/LICENSE" class="Link--secondary">MIT Lisansı</a></p>
+      <ul class="list-style-none d-flex flex-wrap gap-3 mb-0">
+        <li><a href="https://github.com/nyx47rd/animecix" class="Link--secondary" rel="noopener">GitHub</a></li>
+        <li><a href="https://github.com/nyx47rd/animecix/releases" class="Link--secondary" rel="noopener">Sürümler</a></li>
+        <li><a href="https://github.com/nyx47rd/animecix/issues" class="Link--secondary" rel="noopener">Hata bildir</a></li>
+        <li><a href="en.html" class="Link--secondary" hreflang="en">English</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
