@@ -658,6 +658,26 @@ API istekleri de tünel üzerinden gider (ISS engellerini tamamen aşar).\n\
         img_group.add(&upscale_desc);
         root.append(&img_group);
 
+        let fansub_group = adw::PreferencesGroup::new();
+        fansub_group.set_title("Çeviri (Fansub) Seçimi");
+        let ask_row = adw::SwitchRow::new();
+        ask_row.set_title("Her bölümde sor");
+        ask_row.set_subtitle("Kapalıysa otomatik olarak en yüksek puanlı çeviri seçilir");
+        ask_row.set_active(settings.fansub_ask_each_time);
+        fansub_group.add(&ask_row);
+        let fansub_desc = gtk::Label::new(Some(
+            "Bir bölüme tıkladığınızda mevcut çeviriler listelenir (örn. Kirigana, Wolwead). Puan yıldızı topluluk oylarına dayanır.",
+        ));
+        fansub_desc.set_wrap(true);
+        fansub_desc.set_xalign(0.0);
+        fansub_desc.set_margin_top(2);
+        fansub_desc.set_margin_bottom(8);
+        fansub_desc.set_margin_start(14);
+        fansub_desc.set_selectable(false);
+        fansub_desc.add_css_class("dim-label");
+        fansub_group.add(&fansub_desc);
+        root.append(&fansub_group);
+
         let update_group = adw::PreferencesGroup::new();
         update_group.set_title("Güncelleme");
 
@@ -717,6 +737,7 @@ API istekleri de tünel üzerinden gider (ISS engellerini tamamen aşar).\n\
             let up_r = upscale_row.clone();
             let light_r = light_row.clone();
             let patience_spin_c = patience_spin.clone();
+            let ask_r = ask_row.clone();
             let s = s_base.clone();
             let on_save = on_save.clone();
             Rc::new(move || {
@@ -747,9 +768,13 @@ API istekleri de tünel üzerinden gider (ISS engellerini tamamen aşar).\n\
                 };
                 updated.light_mode = light_r.is_active();
                 updated.source_patience_secs = patience_spin_c.value() as u64;
+                updated.fansub_ask_each_time = ask_r.is_active();
                 on_save(updated);
             })
         };
+
+        let sa_ask = save_all.clone();
+        ask_row.connect_active_notify(move |_| sa_ask());
 
         let sa1 = save_all.clone();
         search_toggle_row.connect_active_notify(move |_| sa1());

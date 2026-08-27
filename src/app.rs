@@ -32,6 +32,17 @@ pub enum Msg {
     Search(Result<Vec<Title>, String>),
     Eps(Title, Result<Vec<Episode>, String>),
     Play(Title, Episode, Result<(Vec<String>, Vec<String>, Vec<String>), String>),
+    FansubsLoaded {
+        title: Title,
+        ep: Episode,
+        fansubs: Result<Vec<api::FansubInfo>, String>,
+        default_template: Option<i64>,
+    },
+    FansubChosen {
+        title: Title,
+        ep: Episode,
+        chosen: Option<api::FansubInfo>,
+    },
 }
 
 pub struct App {
@@ -1507,6 +1518,17 @@ impl App {
                 }
                 Err(e) => self.show_error(&e),
             },
+            Msg::FansubsLoaded { title, ep, fansubs, default_template } => match fansubs {
+                Ok(list) => self.after_fansubs_loaded(title, ep, list, default_template),
+                Err(e) => self.show_error(&e),
+            },
+            Msg::FansubChosen { title, ep, chosen } => {
+                if let Some(fs) = chosen {
+                    self.play_with_fansub(&title, &ep, &fs);
+                } else {
+                    self.play_resolved(&title, &ep, None);
+                }
+            }
         }
     }
 
@@ -1524,10 +1546,98 @@ impl App {
         let ep = ep.clone();
         eprintln!("[PLAY] çağrıldı: {} S{:02}E{:02}", title.name, ep.season, ep.episode);
         let is_movie = title.title_type.as_deref() == Some("movie");
+        if is_movie {
+            self.play_resolved(&title, &ep, None);
+            return;
+        }
+        let default_template = self.settings.borrow().default_fansub_template;
+        self.busy(true);
+        let title_s = title.clone();
+        let ep_s = ep.clone();
+        self.spawn(move |c| {
+            let res = c.list_fansubs(title_s.id, ep_s.episode, ep_s.season);
+            move || Msg::FansubsLoaded {
+                title: title_s,
+                ep: ep_s,
+                fansubs: res,
+                default_template,
+            }
+        });
+    }
+
+    fn after_fansubs_loaded(&self, title: Title, ep: Episode, fansubs: Vec<api::FansubInfo>, default_template: Option<i64>) {
+        self.busy(false);
+
+        if fansubs.is_empty() {
+            self.play_resolved(&title, &ep, None);
+            return;
+        }
+
+        if let Some(tpl) = default_template {
+            if let Some(fs) = fansubs.iter().find(|f| f.template_id == tpl) {
+                self.play_with_fansub(&title, &ep, fs);
+                return;
+            }
+        }
+
+        if fansubs.len() == 1 {
+            self.play_with_fansub(&title, &ep, &fansubs[0]);
+            return;
+        }
+
+        let ask = self.settings.borrow().fansub_ask_each_time;
+        if !ask {
+            if let Some(best) = fansubs.first() {
+                eprintln!("[FS] otomatik seçim: {} ({:.2}★)", best.name, best.rating);
+                self.play_with_fansub(&title, &ep, best);
+                return;
+            }
+        }
+
+        let title_s = title.clone();
+        let ep_s = ep.clone();
+        let app_rc = self.clone_ref();
+        crate::ui::fansub_dialog::show_fansub_dialog(
+            &self.window,
+            &format!("{} — S{:02}E{:02}", title.name, ep.season, ep.episode),
+            fansubs,
+            move |chosen: api::FansubInfo| {
+                app_rc.play_with_fansub(&title_s, &ep_s, &chosen);
+            },
+        );
+    }
+
+    fn play_with_fansub(&self, title: &Title, ep: &Episode, fs: &api::FansubInfo) {
+        eprintln!(
+            "[PLAY-FS] {} S{:02}E{:02} → {} (template {}, {:.2}★, {} mirror)",
+            title.name, ep.season, ep.episode, fs.name, fs.template_id, fs.rating, fs.mirror_count
+        );
+        let mirror_urls: Vec<String> = fs.mirrors.iter().map(|m| m.url.clone()).collect();
+        let title_c = title.clone();
+        let ep_c = ep.clone();
+        let client = self.client.clone();
+        self.spawn(move |_| {
+            let res = client
+                .resolve_urls(&mirror_urls, 3)
+                .and_then(|fast_pairs| {
+                    let mut fb = client.episode_candidates(title_c.id, ep_c.episode, ep_c.season)?;
+                    let tried = 3.min(fb.len());
+                    fb.drain(..tried);
+                    let fast: Vec<String> = fast_pairs.iter().map(|(m, _)| m.clone()).collect();
+                    let fast_emb: Vec<String> = fast_pairs.iter().map(|(_, e)| e.clone()).collect();
+                    Ok((fast, fast_emb, fb))
+                });
+            move || Msg::Play(title_c, ep_c, res)
+        });
+    }
+
+    fn play_resolved(&self, title: &Title, ep: &Episode, _fansub_template: Option<i64>) {
+        let title = title.clone();
+        let ep = ep.clone();
         self.busy(true);
         self.spawn(move |c| {
             let pref = c.get_preferred_host(title.id);
-            let res = if is_movie {
+            let res = if title.title_type.as_deref() == Some("movie") {
                 c.resolve_movie(title.id).map(|u| (vec![u], Vec::new(), Vec::new()))
             } else {
                 c.resolve_top(title.id, ep.episode, ep.season, 3, pref.as_deref())

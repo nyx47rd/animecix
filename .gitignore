@@ -12,5 +12,4 @@ assets/hicolor/index.theme
 demo.sh
 src/bin/probe.rs
 src/bin/scrolltest.rs
-src/ui/source_dialog.rs
 flathub/

@@ -42,6 +42,28 @@ pub struct AniSkipTimes {
     pub ed_end: Option<f64>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FansubInfo {
+    pub template_id: i64,
+    pub name: String,
+    pub rating: f64,
+    pub total_votes: i64,
+    pub language: String,
+    pub approved_only: bool,
+    pub mirror_count: usize,
+    pub hosts: Vec<String>,
+    pub mirrors: Vec<FansubMirror>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FansubMirror {
+    pub id: u64,
+    pub host: String,
+    pub url: String,
+    pub quality: Option<String>,
+    pub approved: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct VideoSource {
     pub host: String,
@@ -297,6 +319,10 @@ pub struct Settings {
     pub light_mode: bool,
     #[serde(default = "default_patience")]
     pub source_patience_secs: u64,
+    #[serde(default)]
+    pub default_fansub_template: Option<i64>,
+    #[serde(default = "default_true")]
+    pub fansub_ask_each_time: bool,
 }
 fn default_loading() -> String { "overlay".into() }
 fn default_quick_search() -> bool { true }
@@ -345,6 +371,8 @@ impl Default for Settings {
             upscale: default_upscale(),
             light_mode: false,
             source_patience_secs: default_patience(),
+            default_fansub_template: None,
+            fansub_ask_each_time: true,
         }
     }
 }
@@ -1005,6 +1033,95 @@ impl Client {
         Ok(candidates)
     }
 
+    pub fn list_fansubs(&self, title_id: u64, episode: u64, season: u64) -> Result<Vec<FansubInfo>, String> {
+        let key = format!("evp:fansubs:{title_id}:{season}:{episode}");
+        let d = self.cache_get(&key, 1800, |http| {
+            http.get(format!("{BASE}/secure/episode-videos-points"))
+                .header("Accept", "application/json")
+                .query(&[
+                    ("titleId", &title_id.to_string()),
+                    ("episode", &episode.to_string()),
+                    ("season", &season.to_string()),
+                ])
+                .send()
+                .map_err(|e| e.to_string())?
+                .error_for_status()
+                .map_err(|e| e.to_string())?
+                .json()
+                .map_err(|e| e.to_string())
+        })?;
+        let videos = d["videos"].as_array().cloned().unwrap_or_default();
+        let points = &d["translatorPoints"];
+
+        let mut groups: std::collections::BTreeMap<i64, (f64, i64, String, bool, Vec<serde_json::Value>)> =
+            std::collections::BTreeMap::new();
+        for v in &videos {
+            let tpl = v["template"].as_i64().unwrap_or(0);
+            let point = points[tpl.to_string()].as_f64().unwrap_or(0.0);
+            let votes = v["positive_votes"].as_i64().unwrap_or(0);
+            let extra = v["extra"].as_str().unwrap_or("").trim().to_string();
+            let approved = v["approved"].as_bool().unwrap_or(false);
+            let g = groups.entry(tpl).or_insert((point, 0, String::new(), true, Vec::new()));
+            g.1 += votes;
+            if extra.len() > g.2.len() {
+                g.2 = extra;
+            }
+            if !approved {
+                g.3 = false;
+            }
+            g.4.push(v.clone());
+        }
+
+        let mut out: Vec<FansubInfo> = groups
+            .into_iter()
+            .map(|(tpl, (rating, total_votes, raw_name, approved_only, mut vids))| {
+                vids.sort_by(|a, b| {
+                    let ta = a["url"].as_str().unwrap_or("").contains("tau-video.xyz");
+                    let tb = b["url"].as_str().unwrap_or("").contains("tau-video.xyz");
+                    tb.cmp(&ta)
+                });
+                let language = vids
+                    .first()
+                    .and_then(|v| v["language"].as_str())
+                    .unwrap_or("tr")
+                    .to_string();
+                let mirrors: Vec<FansubMirror> = vids
+                    .iter()
+                    .map(|v| {
+                        let url = v["url"].as_str().unwrap_or("").to_string();
+                        FansubMirror {
+                            id: v["id"].as_u64().unwrap_or(0),
+                            host: Self::source_host_hint(&url).to_string(),
+                            url,
+                            quality: v["quality"].as_str().map(|s| s.to_string()),
+                            approved: v["approved"].as_bool().unwrap_or(false),
+                        }
+                    })
+                    .collect();
+                let hosts: Vec<String> = mirrors.iter().map(|m| m.host.clone()).collect();
+                FansubInfo {
+                    template_id: tpl,
+                    name: clean_fansub_name(&raw_name),
+                    rating,
+                    total_votes,
+                    language,
+                    approved_only,
+                    mirror_count: mirrors.len(),
+                    hosts,
+                    mirrors,
+                }
+            })
+            .collect();
+
+        out.sort_by(|a, b| {
+            b.approved_only
+                .cmp(&a.approved_only)
+                .then_with(|| b.rating.partial_cmp(&a.rating).unwrap_or(std::cmp::Ordering::Equal))
+                .then_with(|| b.total_votes.cmp(&a.total_votes))
+        });
+        Ok(out)
+    }
+
     pub fn resolve_top(
         &self,
         title_id: u64,
@@ -1013,14 +1130,29 @@ impl Client {
         k: usize,
         preferred_host: Option<&str>,
     ) -> Result<Vec<(String, String)>, String> {
-        let t0 = std::time::Instant::now();
-        let mut candidates = match self.episode_candidates(title_id, episode, season) {
+        let candidates = match self.episode_candidates(title_id, episode, season) {
             Ok(c) if !c.is_empty() => c,
             _ => {
                 let all = self.resolve_all(title_id, episode, season)?;
                 return Ok(all.into_iter().map(|u| (u, String::new())).collect());
             }
         };
+        self.resolve_urls_from(candidates, k, preferred_host)
+    }
+
+    pub fn resolve_urls(&self, urls: &[String], k: usize) -> Result<Vec<(String, String)>, String> {
+        let candidates: Vec<String> = urls.iter().take(k.max(1)).cloned().collect();
+        let n = candidates.len();
+        self.resolve_urls_from(candidates, n, None)
+    }
+
+    fn resolve_urls_from(
+        &self,
+        mut candidates: Vec<String>,
+        k: usize,
+        preferred_host: Option<&str>,
+    ) -> Result<Vec<(String, String)>, String> {
+        let t0 = std::time::Instant::now();
         if let Some(pref) = preferred_host.filter(|p| !p.is_empty()) {
             candidates.sort_by_key(|u| if Self::source_host_hint(u) == pref { 0u8 } else { 1u8 });
         }
@@ -2459,5 +2591,49 @@ mod live_tests {
         let r = c.search("one piece").expect("search basarisiz");
         println!("sonuc: {}", r.len());
         assert!(!r.is_empty());
+    }
+}
+
+pub(crate) fn clean_fansub_name(raw: &str) -> String {
+    let s = raw.trim().trim_start_matches('|').trim();
+    if s.is_empty() {
+        return "Bilinmeyen".to_string();
+    }
+    if let Some(pos) = s.find("Çevirmen:") {
+        let after = s[pos + "Çevirmen:".len()..].trim();
+        let cleaned = after.split('|').next().unwrap_or("").trim();
+        if !cleaned.is_empty() {
+            return cleaned.to_string();
+        }
+    }
+    if let Some(pos) = s.find("Encoder:") {
+        let after = s[pos + "Encoder:".len()..].trim();
+        let cleaned = after.split('|').next().unwrap_or("").trim();
+        if !cleaned.is_empty() {
+            return cleaned.to_string();
+        }
+    }
+    s.to_string()
+}
+
+#[cfg(test)]
+mod fansub_tests {
+    use super::*;
+
+    #[test]
+    fn cleans_wolwead_credit() {
+        assert_eq!(clean_fansub_name("Çevirmen: zafhy | Encoder: Wolwead"), "zafhy");
+    }
+
+    #[test]
+    fn cleans_plain_name() {
+        assert_eq!(clean_fansub_name("ugurmaden"), "ugurmaden");
+        assert_eq!(clean_fansub_name(" PuzzleFansub"), "PuzzleFansub");
+    }
+
+    #[test]
+    fn handles_empty() {
+        assert_eq!(clean_fansub_name(""), "Bilinmeyen");
+        assert_eq!(clean_fansub_name("   "), "Bilinmeyen");
     }
 }
