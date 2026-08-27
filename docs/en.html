@@ -1,14 +1,15 @@
 <!DOCTYPE html>
-<html lang="en" data-color-mode="auto" data-light-theme="light" data-dark-theme="dark">
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AnimeciX — A Linux desktop client for anime, series and movies</title>
-<meta name="description" content="AnimeciX: a GTK4 desktop client for anime, series and movies on Linux. Distributed as a single-file AppImage. MPV-based player, AniSkip, Anime4K upscaling, auto-update.">
-<meta name="keywords" content="anime, linux, gtk4, appimage, mpv, aniskip, anime4k, desktop, client">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>AnimeciX</title>
+<meta name="description" content="AnimeciX: a GTK4/libadwaita anime, series and movie desktop client for Linux. Distributed as a single AppImage. MPV, AniSkip, Anime4K, auto-update.">
+<meta name="keywords" content="anime, linux, gtk4, libadwaita, appimage, mpv, aniskip, anime4k">
 <meta name="author" content="nyx47rd">
-<meta name="theme-color" content="#1f2328" media="(prefers-color-scheme: dark)">
-<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#fafafb" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1e1e1e" media="(prefers-color-scheme: dark)">
 
 <link rel="canonical" href="https://nyx47rd.github.io/animecix/en.html">
 <link rel="alternate" hreflang="en" href="https://nyx47rd.github.io/animecix/en.html">
@@ -16,24 +17,20 @@
 <link rel="alternate" hreflang="x-default" href="https://nyx47rd.github.io/animecix/">
 
 <meta property="og:type" content="website">
-<meta property="og:title" content="AnimeciX — Linux anime client">
-<meta property="og:description" content="GTK4 + AppImage. MPV player, AniSkip, Anime4K. Auto-updates.">
+<meta property="og:title" content="AnimeciX">
+<meta property="og:description" content="A GTK4/libadwaita anime, series and movie client for Linux. AppImage.">
 <meta property="og:url" content="https://nyx47rd.github.io/animecix/en.html">
 <meta property="og:image" content="https://nyx47rd.github.io/animecix/assets/icon.png">
 <meta property="og:locale" content="en_US">
 <meta property="og:site_name" content="AnimeciX">
 
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="AnimeciX — Linux anime client">
-<meta name="twitter:description" content="GTK4 + AppImage. MPV, AniSkip, Anime4K. Auto-updates.">
+<meta name="twitter:title" content="AnimeciX">
+<meta name="twitter:description" content="A GTK4/libadwaita anime client for Linux. AppImage.">
 <meta name="twitter:image" content="https://nyx47rd.github.io/animecix/assets/icon.png">
 
 <link rel="icon" type="image/png" href="assets/icon.png">
 <link rel="apple-touch-icon" href="assets/icon.png">
-
-<link rel="stylesheet" href="https://unpkg.com/@primer/css@21.3.1/dist/primer.css">
-<link rel="preconnect" href="https://github.githubassets.com">
-<link rel="preload" href="https://github.githubassets.com/assets/MonaSansVF-wdth-wght-opsz-7a868ff47c93bd97.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
 
 <script type="application/ld+json">
@@ -43,8 +40,7 @@
   "name": "AnimeciX",
   "operatingSystem": "Linux",
   "applicationCategory": "MultimediaApplication",
-  "applicationSubCategory": "Video Player",
-  "description": "A GTK4/libadwaita desktop client for anime, series and movies, distributed as a single AppImage. MPV-based player, AniSkip intro skip, Anime4K upscaling.",
+  "description": "A GTK4/libadwaita anime, series and movie desktop client for Linux. Distributed as a single AppImage. MPV, AniSkip, Anime4K, auto-update.",
   "url": "https://nyx47rd.github.io/animecix/en.html",
   "downloadUrl": "https://github.com/nyx47rd/animecix/releases/latest",
   "softwareVersion": "3.0.0",
@@ -57,14 +53,14 @@
   "featureList": [
     "GTK4/libadwaita UI",
     "Single-file AppImage",
-    "MPV-based player",
+    "MPV player",
     "AniSkip intro/outro skip",
-    "Anime4K shader upscaling (Light, Ultra, Sharpening)",
+    "Anime4K upscaling (Light, Ultra, Sharpening)",
     "Auto-update",
     "VPN proxy support (local SOCKS5)",
-    "Smart source selection (parallel resolution, quality-based)",
+    "Smart source selection",
     "Favorites, Marathon, History",
-    "Dual-path HTTP cascade (direct + tunnel)"
+    "Dual-path HTTP cascade"
   ]
 }
 </script>
@@ -73,187 +69,167 @@
 
 <a href="#main" class="show-on-focus">Skip to content</a>
 
-<header class="Header--full color-bg-default border-bottom">
-  <div class="container-xl p-responsive">
-    <div class="d-flex flex-justify-between flex-items-center py-3">
-      <a href="en.html" class="d-flex flex-items-center text-bold color-fg-default no-underline">
-        <img src="assets/icon.png" width="32" height="32" alt="" class="mr-2">
-        <span class="f4">AnimeciX</span>
-      </a>
-      <nav class="d-none d-md-flex flex-items-center" aria-label="Primary">
-        <a href="#features" class="Link--primary mx-3">Features</a>
-        <a href="#install" class="Link--primary mx-3">Install</a>
-        <a href="#faq" class="Link--primary mx-3">FAQ</a>
-        <a href="index.html" class="Link--primary mx-3" lang="tr" hreflang="tr">Türkçe</a>
-        <a href="https://github.com/nyx47rd/animecix" class="btn btn-outline ml-3" rel="noopener">GitHub</a>
-      </nav>
-    </div>
+<div class="window">
+
+<header class="headerbar">
+  <div class="headerbar-inner">
+    <a href="en.html" class="brand">
+      <img src="assets/icon.png" alt="">
+      <span>AnimeciX</span>
+    </a>
+    <nav aria-label="Primary">
+      <a href="#features" class="nav-link">Features</a>
+      <a href="#install" class="nav-link">Install</a>
+      <a href="#faq" class="nav-link">FAQ</a>
+      <a href="index.html" hreflang="tr">TR</a>
+      <a href="https://github.com/nyx47rd/animecix" class="btn flat" rel="noopener">GitHub</a>
+    </nav>
   </div>
 </header>
 
-<main id="main">
+<main id="main" class="content">
 
-<section class="container-xl p-responsive py-6 py-md-8">
-  <div class="col-12 col-md-10 mx-auto text-center">
-    <h1 class="h1-mktg mb-3">AnimeciX</h1>
-    <p class="f2-light color-fg-muted mb-4">A Linux desktop client for anime, series and movies.</p>
-    <p class="f3 color-fg-muted mb-5">Built with GTK4. Distributed as a single AppImage. Plays through MPV.</p>
-    <div class="d-flex flex-justify-center flex-wrap gap-2">
-      <a href="https://github.com/nyx47rd/animecix/releases/latest" class="btn btn-primary btn-large" rel="noopener">Download AppImage</a>
-      <a href="https://github.com/nyx47rd/animecix" class="btn btn-outline btn-large" rel="noopener">Source code</a>
-    </div>
-    <p class="color-fg-muted f6 mt-3">v3.0.0 · Linux x86_64 · 4.6 MB</p>
+<section class="hero">
+  <span class="section-eyebrow">v3.0.0</span>
+  <h1>AnimeciX</h1>
+  <p class="subtitle">A desktop client for anime, series and movies on Linux. Built with GTK4/libadwaita, distributed as a single AppImage.</p>
+  <div class="actions">
+    <a href="https://github.com/nyx47rd/animecix/releases/latest" class="btn suggested-action large" rel="noopener">Download AppImage</a>
+    <a href="https://github.com/nyx47rd/animecix" class="btn outlined large" rel="noopener">Source</a>
   </div>
+  <p class="meta">Linux x86_64 · 4.6 MB · MIT License</p>
 </section>
 
-<section class="color-bg-subtle border-top border-bottom">
-  <div class="container-xl p-responsive py-6">
-    <div class="col-12 col-md-10 mx-auto text-center">
-      <img src="assets/screenshots/home.png" alt="AnimeciX home screen — categories for anime, series and movies" width="1030" height="770" class="Box--overlay" loading="eager" fetchpriority="high" style="max-width:100%;height:auto;border-radius:6px;">
+<section id="features">
+  <p class="section-eyebrow">Features</p>
+  <h2 class="section-title">What it does</h2>
+
+  <article class="feature">
+    <div class="visual"><img src="assets/screenshots/home.png" alt="Home screen" width="1030" height="770" loading="eager" fetchpriority="high"></div>
+    <div class="text">
+      <h2>Home</h2>
+      <p>Categorized lists for anime, series and movies. Horizontal shelves, large poster, short blurb. Click for details.</p>
     </div>
-  </div>
+  </article>
+
+  <article class="feature reverse">
+    <div class="visual"><img src="assets/screenshots/episodes.png" alt="Episode list with AniSkip" width="1030" height="770" loading="lazy"></div>
+    <div class="text">
+      <h2>Episodes and player</h2>
+      <p>MPV-based player. AniSkip auto-skips intros and outros. Anime4K shaders improve quality (Light, Ultra, Sharpening). Two-minute buffer, auto fullscreen.</p>
+    </div>
+  </article>
+
+  <article class="feature">
+    <div class="visual"><img src="assets/screenshots/search.png" alt="Quick search" width="1030" height="770" loading="lazy"></div>
+    <div class="text">
+      <h2>Quick search</h2>
+      <p>Press <kbd>/</kbd> from the home screen or <kbd>Ctrl</kbd>+<kbd>S</kbd> in the episode screen. All sources resolve in parallel; the highest-quality (by file size) wins. Dead sources are filtered; failures fall through to the next one.</p>
+    </div>
+  </article>
+
+  <article class="feature reverse">
+    <div class="visual"><img src="assets/screenshots/favorites.png" alt="Favorites" width="1030" height="770" loading="lazy"></div>
+    <div class="text">
+      <h2>Favorites, Marathon, History</h2>
+      <p>Add titles to Favorites. Use Marathon for a watch-list with drag-and-drop ordering and per-episode progress. Watched episodes land in History automatically.</p>
+    </div>
+  </article>
+
+  <article class="feature">
+    <div class="visual"><img src="assets/screenshots/settings.png" alt="Settings" width="1030" height="770" loading="lazy"></div>
+    <div class="text">
+      <h2>Settings and VPN proxy</h2>
+      <p>Desktop launcher integration, shortcuts, data reset. If a SOCKS5 proxy is running on <code>127.0.0.1:10808</code> (e.g. sing-box + ProtonVPN), video traffic goes through it. Bypasses ISP restrictions. With no proxy, the app works as usual.</p>
+    </div>
+  </article>
 </section>
 
-<section id="features" class="container-xl p-responsive py-6 py-md-8">
-  <h2 class="h2-mktg text-center mb-6">Features</h2>
+<hr class="divider">
 
-  <div class="d-flex flex-column flex-md-row flex-md-items-center gap-4 mb-6">
-    <div class="col-12 col-md-6">
-      <img src="assets/screenshots/episodes.png" alt="Episode list with AniSkip controls" width="1030" height="770" loading="lazy" class="Box--overlay" style="max-width:100%;height:auto;border-radius:6px;">
-    </div>
-    <div class="col-12 col-md-6">
-      <h3 class="h3-mktg">MPV playback</h3>
-      <p>The player runs on MPV. AniSkip integration auto-skips intros and outros. Anime4K shaders improve image quality with five modes: Off, Sharp, Light (DTD), Ultra (CNN UL), and Light + Sharpening.</p>
-      <p>Two-minute video buffer reduces stuttering. Auto fullscreen, mouse-based volume and seek, subtitle management included.</p>
-    </div>
-  </div>
+<section id="install" class="content-narrow">
+  <p class="section-eyebrow">Install</p>
+  <h2 class="section-title">Three ways to install</h2>
 
-  <div class="d-flex flex-column flex-md-row-reverse flex-md-items-center gap-4 mb-6">
-    <div class="col-12 col-md-6">
-      <img src="assets/screenshots/search.png" alt="Quick search" width="1030" height="770" loading="lazy" class="Box--overlay" style="max-width:100%;height:auto;border-radius:6px;">
-    </div>
-    <div class="col-12 col-md-6">
-      <h3 class="h3-mktg">Quick search</h3>
-      <p>Press <kbd>/</kbd> from the home screen or <kbd>Ctrl</kbd>+<kbd>S</kbd> in the episode screen to search. All sources resolve in parallel; the highest-quality (by file size) is auto-selected.</p>
-      <p>Dead or passive sources are filtered out. If a chosen source fails to open, the next one is tried automatically.</p>
-    </div>
-  </div>
-
-  <div class="d-flex flex-column flex-md-row flex-md-items-center gap-4 mb-6">
-    <div class="col-12 col-md-6">
-      <img src="assets/screenshots/favorites.png" alt="Favorites page" width="1030" height="770" loading="lazy" class="Box--overlay" style="max-width:100%;height:auto;border-radius:6px;">
-    </div>
-    <div class="col-12 col-md-6">
-      <h3 class="h3-mktg">Favorites, Marathon, History</h3>
-      <p>Add titles to Favorites. Use Marathon to plan a watch-list with drag-and-drop ordering and per-episode progress. Watched episodes land in History automatically.</p>
-    </div>
-  </div>
-
-  <div class="d-flex flex-column flex-md-row-reverse flex-md-items-center gap-4 mb-6">
-    <div class="col-12 col-md-6">
-      <img src="assets/screenshots/settings.png" alt="Settings page" width="1030" height="770" loading="lazy" class="Box--overlay" style="max-width:100%;height:auto;border-radius:6px;">
-    </div>
-    <div class="col-12 col-md-6">
-      <h3 class="h3-mktg">Settings and setup wizard</h3>
-      <p>Desktop launcher integration, data reset, keyboard shortcuts. The setup wizard checks dependencies and installs a desktop entry.</p>
-      <p>VPN proxy option: if a SOCKS5 proxy is running on <code>127.0.0.1:10808</code> (e.g. sing-box + ProtonVPN), video traffic goes through it. With no proxy, the app works as usual.</p>
-    </div>
-  </div>
-</section>
-
-<section id="install" class="color-bg-subtle border-top border-bottom">
-  <div class="container-xl p-responsive py-6 py-md-8">
-    <h2 class="h2-mktg text-center mb-6">Install</h2>
-    <div class="col-12 col-md-8 mx-auto">
-
-      <h3 class="h3-mktg mt-4">AppImage (recommended)</h3>
-      <p>Single file, portable, no install required.</p>
-<pre class="highlight"><code class="language-bash">wget https://github.com/nyx47rd/animecix/releases/latest/download/AnimeciX-x86_64.AppImage
+  <h3 class="title-2">AppImage (recommended)</h3>
+  <p>Single file, portable, no install required.</p>
+  <div class="frame">
+<pre><code>wget https://github.com/nyx47rd/animecix/releases/latest/download/AnimeciX-x86_64.AppImage
 chmod +x AnimeciX-x86_64.AppImage
 ./AnimeciX-x86_64.AppImage</code></pre>
+  </div>
 
-      <h3 class="h3-mktg mt-5">Flatpak</h3>
-      <p>Available on Flathub.</p>
-<pre class="highlight"><code class="language-bash">flatpak install flathub io.github.nyx47rd.AnimeciX
+  <h3 class="title-2">Flatpak</h3>
+  <p>Available on Flathub.</p>
+  <div class="frame">
+<pre><code>flatpak install flathub io.github.nyx47rd.AnimeciX
 flatpak run io.github.nyx47rd.AnimeciX</code></pre>
+  </div>
 
-      <h3 class="h3-mktg mt-5">Dependencies</h3>
-      <ul>
-        <li>GTK4, libadwaita, MPV (≥ 0.36)</li>
-        <li>Fedora: <code>sudo dnf install gtk4 libadwaita mpv webkit2gtk4.1</code></li>
-        <li>Ubuntu/Debian: <code>sudo apt install libgtk-4-1 libadwaita-1-0 mpv</code></li>
-      </ul>
+  <h3 class="title-2">Dependencies (manual install)</h3>
+  <div class="boxed-list">
+    <div><h3>Fedora</h3><p><code>sudo dnf install gtk4 libadwaita mpv webkit2gtk4.1</code></p></div>
+    <div><h3>Ubuntu / Debian</h3><p><code>sudo apt install libgtk-4-1 libadwaita-1-0 mpv</code></p></div>
+    <div><h3>Arch</h3><p><code>sudo pacman -S gtk4 libadwaita mpv</code></p></div>
+  </div>
 
-      <p class="color-fg-muted f6 mt-5">The app checks for new versions at startup. The AppImage build can self-update.</p>
+  <p class="caption" style="margin-top:24px">The app checks for new versions on each launch. The AppImage build can self-update.</p>
+</section>
+
+<hr class="divider">
+
+<section id="faq" class="content-narrow">
+  <p class="section-eyebrow">FAQ</p>
+  <h2 class="section-title">Common questions</h2>
+
+  <details class="expander">
+    <summary>Playback stutters on slow internet. What can I do?</summary>
+    <div class="body">
+      <p>Settings → VPN Proxy: run a sing-box + WireGuard configuration on <code>127.0.0.1:10808</code>. The app routes video traffic through that tunnel automatically. When the direct path returns 403 or a network error, the dual-path cascade mechanism falls back to the tunnel.</p>
     </div>
-  </div>
-</section>
+  </details>
 
-<section id="faq" class="container-xl p-responsive py-6 py-md-8">
-  <h2 class="h2-mktg text-center mb-6">FAQ</h2>
-  <div class="col-12 col-md-8 mx-auto">
+  <details class="expander">
+    <summary>How do the Anime4K shaders work?</summary>
+    <div class="body">
+      <p>Settings → Display: pick from five modes — Off, Sharp (ewa_lanczossharp), Light (DTD), Ultra (CNN UL), and Light + Sharpening (DTD + unsharp filter). Light uses low GPU; Ultra maximizes quality.</p>
+    </div>
+  </details>
 
-    <details class="mb-3 Box">
-      <summary class="Box-header"><h3 class="h4 mb-0">Playback stutters on slow internet. What can I do?</h3></summary>
-      <div class="Box-body">
-        <p>Settings → VPN Proxy: run a sing-box + WireGuard configuration on <code>127.0.0.1:10808</code>. The app routes video traffic through that tunnel automatically. When the direct path returns 403 or a network error, the dual-path cascade mechanism falls back to the tunnel.</p>
-      </div>
-    </details>
+  <details class="expander">
+    <summary>Does it auto-update?</summary>
+    <div class="body">
+      <p>The AppImage build checks GitHub Releases on each launch. If a new version is available, a notification asks for confirmation. Disable via Settings → Auto-update.</p>
+    </div>
+  </details>
 
-    <details class="mb-3 Box">
-      <summary class="Box-header"><h3 class="h4 mb-0">How do the Anime4K shaders work?</h3></summary>
-      <div class="Box-body">
-        <p>Settings → Display: pick from five modes — Off, Sharp (ewa_lanczossharp), Light (DTD), Ultra (CNN UL), and Light + Sharpening (DTD + unsharp filter). Light uses low GPU; Ultra maximizes quality.</p>
-      </div>
-    </details>
+  <details class="expander">
+    <summary>Is this official?</summary>
+    <div class="body">
+      <p>No. AnimeciX is an unofficial third-party client. It uses a public API; use at your own responsibility, without harming the service provider.</p>
+    </div>
+  </details>
 
-    <details class="mb-3 Box">
-      <summary class="Box-header"><h3 class="h4 mb-0">Does it auto-update?</h3></summary>
-      <div class="Box-body">
-        <p>The AppImage build checks GitHub Releases on each launch. If a new version is available, a notification asks for confirmation. Disable via Settings → Auto-update.</p>
-      </div>
-    </details>
-
-    <details class="mb-3 Box">
-      <summary class="Box-header"><h3 class="h4 mb-0">Is this official?</h3></summary>
-      <div class="Box-body">
-        <p>No. AnimeciX is an unofficial third-party client. It uses a public API; use at your own responsibility, without harming the service provider.</p>
-      </div>
-    </details>
-
-    <details class="mb-3 Box">
-      <summary class="Box-header"><h3 class="h4 mb-0">Which distros are supported?</h3></summary>
-      <div class="Box-body">
-        <p>Any modern Linux with GTK4, libadwaita and MPV. Tested: Fedora 40+, Ubuntu 24.04+, Arch, openSUSE Tumbleweed, EndeavourOS. The Flatpak build runs on any Flatpak-capable distro.</p>
-      </div>
-    </details>
-
-  </div>
-</section>
-
-<section class="color-bg-emphasis color-fg-on-emphasis">
-  <div class="container-xl p-responsive py-6 text-center">
-    <h2 class="h2-mktg mb-3">Ready to start?</h2>
-    <p class="f3 mb-4">Download the AppImage, run it, watch.</p>
-    <a href="https://github.com/nyx47rd/animecix/releases/latest" class="btn btn-primary btn-large" rel="noopener">Download</a>
-  </div>
+  <details class="expander">
+    <summary>Which distros are supported?</summary>
+    <div class="body">
+      <p>Any modern Linux with GTK4, libadwaita and MPV. Tested: Fedora 40+, Ubuntu 24.04+, Arch, openSUSE Tumbleweed, EndeavourOS. The Flatpak build runs on any Flatpak-capable distro.</p>
+    </div>
+  </details>
 </section>
 
 </main>
 
-<footer class="color-bg-subtle border-top">
-  <div class="container-xl p-responsive py-5">
-    <div class="d-flex flex-wrap flex-justify-between flex-items-center">
-      <p class="color-fg-muted f6 mb-0">© 2026 nyx47rd · <a href="https://github.com/nyx47rd/animecix/blob/main/LICENSE" class="Link--secondary">MIT License</a></p>
-      <ul class="list-style-none d-flex flex-wrap gap-3 mb-0">
-        <li><a href="https://github.com/nyx47rd/animecix" class="Link--secondary" rel="noopener">GitHub</a></li>
-        <li><a href="https://github.com/nyx47rd/animecix/releases" class="Link--secondary" rel="noopener">Releases</a></li>
-        <li><a href="https://github.com/nyx47rd/animecix/issues" class="Link--secondary" rel="noopener">Report issue</a></li>
-        <li><a href="index.html" class="Link--secondary" hreflang="tr">Türkçe</a></li>
-      </ul>
-    </div>
-  </div>
+<footer class="footer">
+  <span>© 2026 nyx47rd · <a href="https://github.com/nyx47rd/animecix/blob/main/LICENSE">MIT</a></span>
+  <ul>
+    <li><a href="https://github.com/nyx47rd/animecix" rel="noopener">GitHub</a></li>
+    <li><a href="https://github.com/nyx47rd/animecix/releases" rel="noopener">Releases</a></li>
+    <li><a href="https://github.com/nyx47rd/animecix/issues" rel="noopener">Report issue</a></li>
+    <li><a href="index.html" hreflang="tr">Türkçe</a></li>
+  </ul>
 </footer>
 
+</div>
 </body>
 </html>
