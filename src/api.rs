@@ -83,7 +83,7 @@ pub struct VideoSource {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct Title {
+ pub struct Title {
     #[serde(default)]
     pub id: u64,
     #[serde(default)]
@@ -106,6 +106,14 @@ pub struct Title {
     pub episode_count: Option<i64>,
     #[serde(default)]
     pub release_date: Option<String>,
+    #[serde(default)]
+    pub name_english: Option<String>,
+    #[serde(default)]
+    pub name_romanji: Option<String>,
+    #[serde(default)]
+    pub local_vote_average: Option<String>,
+    #[serde(default)]
+    pub local_vote_count: Option<i64>,
 }
 
 impl Title {
@@ -138,6 +146,10 @@ impl Title {
             runtime: r["runtime"].as_i64(),
             episode_count: r["episode_count"].as_i64(),
             release_date: r["release_date"].as_str().map(|s| s.to_string()),
+            name_english: r["name_english"].as_str().map(|s| s.to_string()),
+            name_romanji: r["name_romanji"].as_str().map(|s| s.to_string()),
+            local_vote_average: r["local_vote_average"].as_str().map(|s| s.to_string()),
+            local_vote_count: r["local_vote_count"].as_i64(),
         })
     }
 
@@ -659,6 +671,32 @@ impl Client {
             }
         }
         Ok(cats)
+    }
+
+    pub fn base_url() -> &'static str {
+        "https://animecix.tv"
+    }
+
+    pub fn fetch_title_json(&self, title_id: u64) -> Result<serde_json::Value, String> {
+        let key = format!("tdetail:{title_id}");
+        self.cache_get(&key, 3600, |http| {
+            http.get(format!("{}/secure/titles/{title_id}", Self::base_url()))
+                .header("Accept", "application/json")
+                .send()
+                .map_err(|e| e.to_string())?
+                .error_for_status()
+                .map_err(|e| e.to_string())?
+                .json()
+                .map_err(|e| e.to_string())
+        })
+    }
+
+    pub fn parse_title_from_json(v: &serde_json::Value) -> Result<Title, String> {
+        let title_obj = v
+            .get("title")
+            .cloned()
+            .ok_or_else(|| "title alanı yok".to_string())?;
+        serde_json::from_value(title_obj).map_err(|e| format!("Title parse: {e}"))
     }
 
     pub fn search(&self, q: &str) -> Result<Vec<Title>, String> {
