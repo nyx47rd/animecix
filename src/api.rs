@@ -32,6 +32,15 @@ pub struct Client {
     bytes: std::sync::Mutex<HashMap<String, (u64, Vec<u8>)>>,
     resolved: std::sync::Mutex<HashMap<String, (u64, String)>>,
     cache_dir: PathBuf,
+    translators: std::sync::Mutex<HashMap<i64, TranslatorMeta>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TranslatorMeta {
+    pub id: i64,
+    pub name: String,
+    pub long_name: String,
+    pub url: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -411,7 +420,69 @@ impl Client {
             bytes: std::sync::Mutex::new(HashMap::new()),
             resolved: std::sync::Mutex::new(HashMap::new()),
             cache_dir,
+            translators: std::sync::Mutex::new(HashMap::new()),
         }
+    }
+
+    pub fn load_translators(&self) -> Result<(), String> {
+        if !self.translators.lock().unwrap().is_empty() {
+            return Ok(());
+        }
+        let d = self.cache_get("translators:list", 86400, |http| {
+            http.get(format!("{BASE}/secure/translators"))
+                .header("Accept", "application/json")
+                .send()
+                .map_err(|e| e.to_string())?
+                .error_for_status()
+                .map_err(|e| e.to_string())?
+                .json()
+                .map_err(|e| e.to_string())
+        })?;
+        let arr = d.as_array().cloned().unwrap_or_default();
+        let mut map = self.translators.lock().unwrap();
+        map.clear();
+        for t in arr {
+            let id = t["id"].as_i64().unwrap_or(0);
+            if id == 0 {
+                continue;
+            }
+            let name = t["name"].as_str().unwrap_or("").to_string();
+            let long_name = t["translator"].as_str().unwrap_or("").to_string();
+            let url = t["translator_url"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+            let display = if !name.is_empty() {
+                name
+            } else {
+                long_name.clone()
+            };
+            map.insert(
+                id,
+                TranslatorMeta {
+                    id,
+                    name: display,
+                    long_name,
+                    url,
+                },
+            );
+        }
+        eprintln!("[TRANSLATORS] {} çevirmen yüklendi", map.len());
+        Ok(())
+    }
+
+    pub fn translator_name(&self, template_id: i64) -> Option<String> {
+        self.translators
+            .lock()
+            .unwrap()
+            .get(&template_id)
+            .map(|t| t.name.clone())
+    }
+
+    pub fn list_translators(&self) -> Vec<TranslatorMeta> {
+        self.translators
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect()
     }
 
 
@@ -1034,6 +1105,7 @@ impl Client {
     }
 
     pub fn list_fansubs(&self, title_id: u64, episode: u64, season: u64) -> Result<Vec<FansubInfo>, String> {
+        let _ = self.load_translators();
         let key = format!("evp:fansubs:{title_id}:{season}:{episode}");
         let d = self.cache_get(&key, 1800, |http| {
             http.get(format!("{BASE}/secure/episode-videos-points"))
@@ -1053,29 +1125,32 @@ impl Client {
         let videos = d["videos"].as_array().cloned().unwrap_or_default();
         let points = &d["translatorPoints"];
 
-        let mut groups: std::collections::BTreeMap<String, (f64, i64, bool, Vec<serde_json::Value>)> =
+        let mut groups: std::collections::BTreeMap<i64, (String, f64, i64, bool, Vec<serde_json::Value>)> =
             std::collections::BTreeMap::new();
         for v in &videos {
-            let raw_extra = v["extra"].as_str().unwrap_or("").trim().to_string();
-            let fansub_name = clean_fansub_name(&raw_extra);
-            let approved = v["approved"].as_bool().unwrap_or(false);
             let tpl = v["template"].as_i64().unwrap_or(0);
+            let translator_name = self
+                .translator_name(tpl)
+                .unwrap_or_else(|| clean_fansub_name(v["extra"].as_str().unwrap_or("")));
+            let approved = v["approved"].as_bool().unwrap_or(false);
             let point = points[tpl.to_string()].as_f64().unwrap_or(0.0);
             let votes = v["positive_votes"].as_i64().unwrap_or(0);
-            let g = groups.entry(fansub_name).or_insert((0.0, 0, true, Vec::new()));
-            if point > g.0 {
-                g.0 = point;
+            let g = groups
+                .entry(tpl)
+                .or_insert((translator_name, 0.0, 0, true, Vec::new()));
+            if point > g.1 {
+                g.1 = point;
             }
-            g.1 += votes;
+            g.2 += votes;
             if !approved {
-                g.2 = false;
+                g.3 = false;
             }
-            g.3.push(v.clone());
+            g.4.push(v.clone());
         }
 
         let mut out: Vec<FansubInfo> = groups
             .into_iter()
-            .map(|(name, (rating, total_votes, approved_only, mut vids))| {
+            .map(|(tpl, (name, rating, total_votes, approved_only, mut vids))| {
                 vids.sort_by(|a, b| {
                     let ta = a["url"].as_str().unwrap_or("").contains("tau-video.xyz");
                     let tb = b["url"].as_str().unwrap_or("").contains("tau-video.xyz");
@@ -1101,7 +1176,7 @@ impl Client {
                     .collect();
                 let hosts: Vec<String> = mirrors.iter().map(|m| m.host.clone()).collect();
                 FansubInfo {
-                    template_id: 0,
+                    template_id: tpl,
                     name,
                     rating,
                     total_votes,
@@ -2602,20 +2677,41 @@ pub(crate) fn clean_fansub_name(raw: &str) -> String {
         return "Bilinmeyen".to_string();
     }
 
+    let lower = s.to_lowercase();
+
+    let known = [
+        ("raionsubs", "RaionSubs"),
+        ("gachaflex", "GachaFlex Fansub"),
+        ("shyphic - surui", "shyphic - Surui"),
+        ("shyphic", "shyphic"),
+        ("surui", "Surui"),
+        ("kirigana", "Kirigana"),
+        ("wolwead", "Wolwead"),
+        ("ugurmaden", "ugurmaden"),
+        ("puzzlefansub", "PuzzleFansub"),
+        ("aoisubs", "AoiSubs"),
+        ("anikeyf", "AniKeyf"),
+        ("xerneas", "xerneas"),
+    ];
+    for (key, label) in known {
+        if lower.contains(key) {
+            return label.to_string();
+        }
+    }
+
     let stripped = s
         .strip_prefix("Çevirmen:")
         .or_else(|| s.strip_prefix("Çeviri:"))
-        .or_else(|| s.strip_prefix("Encoder:"))
         .unwrap_or(s)
         .trim();
 
     let pipe_end = stripped.find('|').unwrap_or(stripped.len());
     let part = &stripped[..pipe_end];
 
-    let lower = part.to_lowercase();
-    let cut = lower
+    let lower2 = part.to_lowercase();
+    let cut = lower2
         .find("redakte")
-        .or_else(|| lower.find("encoder"))
+        .or_else(|| lower2.find("encode"))
         .unwrap_or(part.len());
     let name = part[..cut].trim();
     if name.is_empty() {
@@ -2631,7 +2727,7 @@ mod fansub_tests {
 
     #[test]
     fn cleans_wolwead_credit() {
-        assert_eq!(clean_fansub_name("Çevirmen: zafhy | Encoder: Wolwead"), "zafhy");
+        assert_eq!(clean_fansub_name("Çevirmen: zafhy | Encoder: Wolwead"), "Wolwead");
     }
 
     #[test]
@@ -2662,5 +2758,18 @@ mod fansub_tests {
     #[test]
     fn cleans_multiple_prefixes() {
         assert_eq!(clean_fansub_name("Encoder: Wolwead | Sürüm: 2"), "Wolwead");
+    }
+
+    #[test]
+    fn cleans_raionsubs_full_credit() {
+        assert_eq!(
+            clean_fansub_name("Çeviri: xerneas Redakte: Shauna Encode: YerliOyuncu919 / www.raionsubs.com"),
+            "RaionSubs"
+        );
+    }
+
+    #[test]
+    fn keeps_shyphic_pair() {
+        assert_eq!(clean_fansub_name("shyphic - Surui"), "shyphic - Surui");
     }
 }
