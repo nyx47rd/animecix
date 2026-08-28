@@ -1152,9 +1152,19 @@ impl Client {
             .into_iter()
             .map(|(tpl, (name, rating, total_votes, approved_only, mut vids))| {
                 vids.sort_by(|a, b| {
-                    let ta = a["url"].as_str().unwrap_or("").contains("tau-video.xyz");
-                    let tb = b["url"].as_str().unwrap_or("").contains("tau-video.xyz");
-                    tb.cmp(&ta)
+                    let aa = a["approved"].as_bool().unwrap_or(false);
+                    let ab = b["approved"].as_bool().unwrap_or(false);
+                    ab.cmp(&aa)
+                        .then_with(|| {
+                            let ta = a["url"].as_str().unwrap_or("").contains("tau-video.xyz");
+                            let tb = b["url"].as_str().unwrap_or("").contains("tau-video.xyz");
+                            tb.cmp(&ta)
+                        })
+                        .then_with(|| {
+                            let va = a["positive_votes"].as_i64().unwrap_or(0);
+                            let vb = b["positive_votes"].as_i64().unwrap_or(0);
+                            vb.cmp(&va)
+                        })
                 });
                 let language = vids
                     .first()
