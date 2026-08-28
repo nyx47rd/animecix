@@ -226,7 +226,8 @@ impl App {
         toast.set_child(Some(&content));
 
         let aicix_fab = gtk::Button::new();
-        aicix_fab.set_icon_name("chat-message-new-symbolic");
+        let fab_icon = crate::ui::icons::lucide_label(lucide_icons::Icon::MessageCircle, 28);
+        aicix_fab.set_child(Some(&fab_icon));
         aicix_fab.set_tooltip_text(Some("Aicix · Yapay Zeka Asistan"));
         aicix_fab.add_css_class("aicix-fab");
         aicix_fab.add_css_class("circular");
@@ -293,6 +294,7 @@ impl App {
         }
 
         app_inst.chain_signals();
+        crate::ui::icons::install_lucide_font();
         {
             let mut aicix = app_inst.aicix_state.lock().unwrap();
             aicix.api_key = app_inst.settings.borrow().aicix_api_key.clone();
