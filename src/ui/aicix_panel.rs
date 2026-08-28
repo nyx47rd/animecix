@@ -29,9 +29,11 @@ impl AicixPanel {
         toolbar.set_margin_top(8);
         toolbar.set_margin_bottom(4);
 
-        let new_btn = gtk::Button::with_label("🗑 Yeni Sohbet");
-        new_btn.add_css_class("flat");
+        let new_btn = gtk::Button::new();
+        new_btn.set_icon_name("user-trash-symbolic");
+        new_btn.set_label("Yeni Sohbet");
         new_btn.set_tooltip_text(Some("Konuşma geçmişini temizle"));
+        new_btn.add_css_class("aicix-new-btn");
         toolbar.append(&new_btn);
 
         let model_label = gtk::Label::new(Some("Model: qwen/qwen3.8-27b"));
@@ -80,10 +82,12 @@ impl AicixPanel {
         input_entry.add_css_class("aicix-input");
         input_box.append(&input_entry);
 
-        let send_btn = gtk::Button::from_icon_name("paper-plane-symbolic");
+        let send_btn = gtk::Button::from_icon_name("mail-send-symbolic");
         send_btn.add_css_class("suggested-action");
         send_btn.add_css_class("circular");
+        send_btn.add_css_class("aicix-send-btn");
         send_btn.set_tooltip_text(Some("Gönder"));
+        send_btn.set_size_request(40, 40);
         input_box.append(&send_btn);
 
         root.append(&input_box);

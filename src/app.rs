@@ -226,12 +226,12 @@ impl App {
         toast.set_child(Some(&content));
 
         let aicix_fab = gtk::Button::new();
-        aicix_fab.set_icon_name("chat-bubble-text-symbolic");
+        aicix_fab.set_icon_name("chat-message-new-symbolic");
         aicix_fab.set_tooltip_text(Some("Aicix · Yapay Zeka Asistan"));
         aicix_fab.add_css_class("aicix-fab");
         aicix_fab.add_css_class("circular");
         aicix_fab.add_css_class("suggested-action");
-        aicix_fab.set_size_request(56, 56);
+        aicix_fab.set_size_request(64, 64);
         aicix_fab.set_halign(gtk::Align::End);
         aicix_fab.set_valign(gtk::Align::End);
         aicix_fab.set_margin_end(20);
@@ -423,12 +423,33 @@ impl App {
 
         let aicix_fab_this = self.clone_ref();
         self.aicix_fab.connect_clicked(move |_| {
-            let mut st = aicix_fab_this.page_history.borrow_mut();
-            if st.last() != Some(&Page::Aicix) {
-                st.push(Page::Aicix);
+            {
+                let mut st = aicix_fab_this.page_history.borrow_mut();
+                if st.last() != Some(&Page::Aicix) {
+                    st.push(Page::Aicix);
+                }
             }
-            drop(st);
             aicix_fab_this.show_page(&Page::Aicix);
+            aicix_fab_this.aicix_fab.set_sensitive(false);
+            let step_count = 12u32;
+            let step_ms = 24u64;
+            for i in 1..=step_count {
+                let frac = 1.0 - (i as f64 / step_count as f64);
+                let this = aicix_fab_this.clone_ref();
+                glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(i as u64 * step_ms),
+                    move || {
+                        this.aicix_fab.set_opacity(frac);
+                    },
+                );
+            }
+            let this = aicix_fab_this.clone_ref();
+            glib::timeout_add_local_once(
+                std::time::Duration::from_millis((step_count as u64 * step_ms) + 50),
+                move || {
+                    this.aicix_fab.set_sensitive(true);
+                },
+            );
         });
 
         {
@@ -485,6 +506,11 @@ impl App {
         use gtk::prelude::IsA;
         self.progress_bars.borrow_mut().clear();
         self.back_btn.set_sensitive(self.page_history.borrow().len() > 1);
+
+        match page {
+            Page::Aicix => self.aicix_fab.set_opacity(0.0),
+            _ => self.aicix_fab.set_opacity(1.0),
+        }
 
         fn switch<T: IsA<gtk::Widget>>(
             stack: &gtk::Stack,
@@ -1106,6 +1132,11 @@ impl App {
             move |new_s| {
                 *this_save.settings.borrow_mut() = new_s.clone();
                 this_save.client.save_settings(&new_s);
+                {
+                    let mut aicix = this_save.aicix_state.lock().unwrap();
+                    aicix.api_key = new_s.aicix_api_key.clone();
+                    aicix.model = new_s.aicix_model.clone();
+                }
                 let toast = adw::Toast::new("Ayarlar kaydedildi");
                 toast.set_timeout(3);
                 this_save.toast.add_toast(toast);

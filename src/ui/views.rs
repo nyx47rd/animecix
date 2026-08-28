@@ -714,17 +714,27 @@ API istekleri de tünel üzerinden gider (ISS engellerini tamamen aşar).\n\
         aicix_test_btn.set_margin_bottom(8);
         aicix_group.add(&aicix_test_btn);
 
-        let aicix_desc = gtk::Label::new(Some(
-            "BYOK: API anahtarınız Groq'a gönderilir, başka yere kaydedilmez. Anahtar sadece bu cihazda, ~/.config/animecix/state.json içinde saklanır.\n\nÜcretsiz Groq anahtarı: console.groq.com/keys",
+        let info_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        info_box.set_margin_start(14);
+        info_box.set_margin_end(14);
+        info_box.set_margin_top(4);
+        info_box.set_margin_bottom(12);
+        info_box.add_css_class("aicix-info-box");
+        let info_title = gtk::Label::new(Some("BYOK — Anahtar Cihazda Kalır"));
+        info_title.set_xalign(0.0);
+        info_title.add_css_class("aicix-info-title");
+        info_box.append(&info_title);
+        let info_body = gtk::Label::new(Some(
+            "API anahtarın sadece bu cihazda saklanır (~/.local/share/animecix/settings.json). Sadece Groq sunucusuna gönderilir, başka yere aktarılmaz.\n\nÜcretsiz anahtar: console.groq.com/keys",
         ));
-        aicix_desc.set_wrap(true);
-        aicix_desc.set_xalign(0.0);
-        aicix_desc.set_margin_top(2);
-        aicix_desc.set_margin_bottom(8);
-        aicix_desc.set_margin_start(14);
-        aicix_desc.set_selectable(true);
-        aicix_desc.add_css_class("dim-label");
-        aicix_group.add(&aicix_desc);
+        info_body.set_xalign(0.0);
+        info_body.set_wrap(true);
+        info_body.set_max_width_chars(60);
+        info_body.set_selectable(true);
+        info_body.add_css_class("dim-label");
+        info_body.add_css_class("caption");
+        info_box.append(&info_body);
+        aicix_group.add(&info_box);
         root.append(&aicix_group);
 
         let update_group = adw::PreferencesGroup::new();
@@ -840,7 +850,7 @@ API istekleri de tünel üzerinden gider (ISS engellerini tamamen aşar).\n\
         ask_row.connect_active_notify(move |_| sa_ask());
         let sa_aicix_key = save_all.clone();
         aicix_key_row.connect_changed(move |_| {
-            let _ = sa_aicix_key;
+            sa_aicix_key();
         });
         let sa_aicix_apply = save_all.clone();
         aicix_key_row.connect_apply(move |_| {
