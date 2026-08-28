@@ -332,6 +332,10 @@ pub struct Settings {
     pub default_fansub_template: Option<i64>,
     #[serde(default = "default_true")]
     pub fansub_ask_each_time: bool,
+    #[serde(default)]
+    pub aicix_api_key: Option<String>,
+    #[serde(default = "default_aicix_model")]
+    pub aicix_model: String,
 }
 fn default_loading() -> String { "overlay".into() }
 fn default_quick_search() -> bool { true }
@@ -340,6 +344,7 @@ fn default_search_shortcut() -> String { "Ctrl+S".into() }
 fn default_true() -> bool { true }
 fn default_upscale() -> String { "hafif".into() }
 fn default_patience() -> u64 { 20 }
+fn default_aicix_model() -> String { "qwen/qwen3.8-27b".to_string() }
 
 pub(crate) fn upscale_mpv_args(upscale: &str, shader_path: Option<&str>) -> Vec<String> {
     match upscale {
@@ -382,6 +387,8 @@ impl Default for Settings {
             source_patience_secs: default_patience(),
             default_fansub_template: None,
             fansub_ask_each_time: true,
+            aicix_api_key: None,
+            aicix_model: default_aicix_model(),
         }
     }
 }

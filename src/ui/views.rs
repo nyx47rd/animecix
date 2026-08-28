@@ -2,6 +2,8 @@ use gtk::prelude::*;
 use adw::prelude::*;
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
+use crate::aicix;
 use crate::api::{Client, HistoryEntry, Settings, Title};
 use crate::ui::episodes_view;
 use gio::prelude::*;
@@ -678,6 +680,53 @@ API istekleri de tünel üzerinden gider (ISS engellerini tamamen aşar).\n\
         fansub_group.add(&fansub_desc);
         root.append(&fansub_group);
 
+        let aicix_group = adw::PreferencesGroup::new();
+        aicix_group.set_title("Aicix (Yapay Zeka Asistan)");
+        aicix_group.set_description(Some("Groq API kullanarak doğal dilde anime arama ve öneri alın"));
+
+        let aicix_key_row = adw::PasswordEntryRow::new();
+        aicix_key_row.set_title("Groq API Anahtarı");
+        aicix_key_row.set_show_apply_button(false);
+        aicix_key_row.set_text(settings.aicix_api_key.as_deref().unwrap_or(""));
+        aicix_group.add(&aicix_key_row);
+
+        let aicix_model_row = adw::ComboRow::new();
+        aicix_model_row.set_title("Model");
+        aicix_model_row.set_subtitle("qwen/qwen3.8-27b önerilen");
+        let models = &[
+            "qwen/qwen3.8-27b",
+            "qwen/qwen3-32b",
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+        ];
+        let model_list = gtk::StringList::new(models);
+        aicix_model_row.set_model(Some(&model_list));
+        let cur = models.iter().position(|&m| m == settings.aicix_model).unwrap_or(0);
+        aicix_model_row.set_selected(cur as u32);
+        aicix_group.add(&aicix_model_row);
+
+        let aicix_test_btn = gtk::Button::with_label("Bağlantıyı Test Et");
+        aicix_test_btn.add_css_class("pill");
+        aicix_test_btn.add_css_class("suggested-action");
+        aicix_test_btn.set_halign(gtk::Align::End);
+        aicix_test_btn.set_margin_top(8);
+        aicix_test_btn.set_margin_end(14);
+        aicix_test_btn.set_margin_bottom(8);
+        aicix_group.add(&aicix_test_btn);
+
+        let aicix_desc = gtk::Label::new(Some(
+            "BYOK: API anahtarınız Groq'a gönderilir, başka yere kaydedilmez. Anahtar sadece bu cihazda, ~/.config/animecix/state.json içinde saklanır.\n\nÜcretsiz Groq anahtarı: console.groq.com/keys",
+        ));
+        aicix_desc.set_wrap(true);
+        aicix_desc.set_xalign(0.0);
+        aicix_desc.set_margin_top(2);
+        aicix_desc.set_margin_bottom(8);
+        aicix_desc.set_margin_start(14);
+        aicix_desc.set_selectable(true);
+        aicix_desc.add_css_class("dim-label");
+        aicix_group.add(&aicix_desc);
+        root.append(&aicix_group);
+
         let update_group = adw::PreferencesGroup::new();
         update_group.set_title("Güncelleme");
 
@@ -738,6 +787,8 @@ API istekleri de tünel üzerinden gider (ISS engellerini tamamen aşar).\n\
             let light_r = light_row.clone();
             let patience_spin_c = patience_spin.clone();
             let ask_r = ask_row.clone();
+            let aicix_key_r = aicix_key_row.clone();
+            let aicix_model_r = aicix_model_row.clone();
             let s = s_base.clone();
             let on_save = on_save.clone();
             Rc::new(move || {
@@ -769,12 +820,73 @@ API istekleri de tünel üzerinden gider (ISS engellerini tamamen aşar).\n\
                 updated.light_mode = light_r.is_active();
                 updated.source_patience_secs = patience_spin_c.value() as u64;
                 updated.fansub_ask_each_time = ask_r.is_active();
+                let key_text = aicix_key_r.text().to_string();
+                updated.aicix_api_key = if key_text.trim().is_empty() {
+                    None
+                } else {
+                    Some(key_text)
+                };
+                updated.aicix_model = match aicix_model_r.selected() {
+                    1 => "qwen/qwen3-32b".into(),
+                    2 => "llama-3.3-70b-versatile".into(),
+                    3 => "llama-3.1-8b-instant".into(),
+                    _ => "qwen/qwen3.8-27b".into(),
+                };
                 on_save(updated);
             })
         };
 
         let sa_ask = save_all.clone();
         ask_row.connect_active_notify(move |_| sa_ask());
+        let sa_aicix_key = save_all.clone();
+        aicix_key_row.connect_changed(move |_| {
+            let _ = sa_aicix_key;
+        });
+        let sa_aicix_apply = save_all.clone();
+        aicix_key_row.connect_apply(move |_| {
+            sa_aicix_apply();
+        });
+        let sa_aicix_model = save_all.clone();
+        aicix_model_row.connect_selected_notify(move |_| sa_aicix_model());
+
+        aicix_test_btn.connect_clicked(move |btn| {
+            btn.set_sensitive(false);
+            let key = aicix_key_row.text().to_string();
+            if key.trim().is_empty() {
+                btn.set_label("Anahtar boş");
+                btn.set_sensitive(true);
+                return;
+            }
+            let model = match aicix_model_row.selected() {
+                1 => "qwen/qwen3-32b",
+                2 => "llama-3.3-70b-versatile",
+                3 => "llama-3.1-8b-instant",
+                _ => "qwen/qwen3.8-27b",
+            };
+            let state = Arc::new(Mutex::new(aicix::AicixState::new()));
+            state.lock().unwrap().api_key = Some(key);
+            state.lock().unwrap().model = model.to_string();
+            let client = aicix::AicixClient::new(state);
+            let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+            std::thread::spawn(move || {
+                let result = client.send_test();
+                let _ = tx.send(result);
+            });
+            let btn_c = btn.clone();
+            glib::MainContext::default().spawn_local(async move {
+                if let Ok(result) = rx.recv() {
+                    match result {
+                        Ok(msg) => {
+                            btn_c.set_label(&format!("✓ {msg}"));
+                        }
+                        Err(e) => {
+                            btn_c.set_label(&format!("✗ {e}"));
+                        }
+                    }
+                }
+                btn_c.set_sensitive(true);
+            });
+        });
 
         let sa1 = save_all.clone();
         search_toggle_row.connect_active_notify(move |_| sa1());
