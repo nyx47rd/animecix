@@ -1608,6 +1608,12 @@ impl App {
     }
 
     fn play_with_fansub(&self, title: &Title, ep: &Episode, fs: &api::FansubInfo) {
+        let toast = adw::Toast::new(&format!(
+            "🎬 {} hazırlanıyor ({} · {:.1}★)…",
+            title.name, fs.name, fs.rating
+        ));
+        toast.set_timeout(2);
+        self.toast.add_toast(toast);
         eprintln!(
             "[PLAY-FS] {} S{:02}E{:02} → {} ({:.2}★, {} mirror)",
             title.name, ep.season, ep.episode, fs.name, fs.rating, fs.mirror_count
@@ -1650,6 +1656,12 @@ impl App {
     }
 
     fn play_resolved(&self, title: &Title, ep: &Episode, _fansub_template: Option<i64>) {
+        let toast = adw::Toast::new(&format!(
+            "🎬 {} hazırlanıyor…",
+            title.name
+        ));
+        toast.set_timeout(2);
+        self.toast.add_toast(toast);
         let title = title.clone();
         let ep = ep.clone();
         self.busy(true);
