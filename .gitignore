@@ -3,6 +3,11 @@
 state.json
 squashfs-root/
 /tmp
+*.har
+favoriler_kapak_gecmisi.md
+*.png
+!docs/**/*.png
+!assets/**/*.png
 
 # === Build artefaktları (GitHub'a gönderilmez) ===
 *.AppImage
