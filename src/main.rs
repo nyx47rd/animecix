@@ -1,4 +1,3 @@
-mod aicix;
 mod api;
 mod app;
 mod covers;

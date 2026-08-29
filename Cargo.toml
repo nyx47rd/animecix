@@ -1,6 +1,6 @@
 [package]
 name = "animecix"
-version = "3.2.0"
+version = "3.2.1"
 edition = "2021"
 
 [dependencies]
@@ -15,11 +15,8 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 wreq = "=6.0.0-rc.31"
 wreq-util = "=3.0.0-rc.14"
 futures = "0.3"
-tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros", "io-util"] }
+tokio = { version = "1", features = ["rt", "net", "time"] }
 libc = "0.2.189"
-eventsource-stream = "0.2"
-lucide-icons = "1.35"
-webkit2gtk = "2.0"
 
 [profile.release]
 lto = true

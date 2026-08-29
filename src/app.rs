@@ -6,7 +6,6 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use gtk::gio;
 
-use crate::aicix;
 use crate::api::{self, Client, Episode, State, Title};
 use crate::covers::CoverManager;
 
@@ -24,7 +23,6 @@ pub enum Page {
     History,
     Settings,
     Search,
-    Aicix,
     Episodes { title: Title, eps: Vec<Episode> },
     Movie { title: Title, eps: Vec<Episode> },
 }
@@ -56,7 +54,6 @@ pub struct App {
     pub marathon_btn: gtk::Button,
     pub hist_btn: gtk::Button,
     pub settings_btn: gtk::Button,
-    pub aicix_fab: gtk::Button,
     pub title_label: gtk::Label,
     pub search_bar: gtk::SearchBar,
     pub search_entry: gtk::SearchEntry,
@@ -75,8 +72,6 @@ pub struct App {
     pub opening_toast_shown_at: Rc<RefCell<Option<std::time::Instant>>>,
     pub loading_gen: Rc<Cell<u32>>,
     pub home_acts: Rc<RefCell<Vec<Option<usize>>>>,
-    pub aicix_state: Arc<Mutex<crate::aicix::AicixState>>,
-    pub aicix_panel: Rc<RefCell<Option<crate::ui::aicix_panel::AicixPanel>>>,
 }
 
 fn resolve_upscale_shader(name: &str) -> Option<String> {
@@ -225,33 +220,13 @@ impl App {
         let toast = adw::ToastOverlay::new();
         toast.set_child(Some(&content));
 
-        let aicix_fab = gtk::Button::new();
-        let fab_icon = crate::ui::icons::lucide_label(lucide_icons::Icon::MessageCircle, 28);
-        aicix_fab.set_child(Some(&fab_icon));
-        aicix_fab.set_tooltip_text(Some("Aicix · Yapay Zeka Asistan"));
-        aicix_fab.add_css_class("aicix-fab");
-        aicix_fab.add_css_class("circular");
-        aicix_fab.add_css_class("suggested-action");
-        aicix_fab.set_size_request(64, 64);
-        aicix_fab.set_halign(gtk::Align::End);
-        aicix_fab.set_valign(gtk::Align::End);
-        aicix_fab.set_margin_end(20);
-        aicix_fab.set_margin_bottom(20);
-        aicix_fab.set_focus_on_click(false);
-        aicix_fab.set_focusable(false);
-
-        let overlay = gtk::Overlay::new();
-        overlay.set_child(Some(&toast));
-        overlay.add_overlay(&aicix_fab);
-        overlay.set_measure_overlay(&aicix_fab, true);
-
         let window = adw::ApplicationWindow::builder()
             .application(app)
             .title("AnimeciX")
             .default_width(980)
             .default_height(720)
             .resizable(false)
-            .content(&overlay)
+            .content(&toast)
             .build();
 
         let initial_page = if welcome_seen { Page::Home } else { Page::Welcome };
@@ -284,22 +259,13 @@ impl App {
             marathon_btn,
             hist_btn,
             settings_btn,
-            aicix_fab,
             home_acts: Rc::new(RefCell::new(Vec::new())),
-            aicix_state: Arc::new(Mutex::new(aicix::AicixState::new())),
-            aicix_panel: Rc::new(RefCell::new(None)),
         });
         {
             // Aicix init deferred to Aşama 2
         }
 
         app_inst.chain_signals();
-        crate::ui::icons::install_lucide_font();
-        {
-            let mut aicix = app_inst.aicix_state.lock().unwrap();
-            aicix.api_key = app_inst.settings.borrow().aicix_api_key.clone();
-            aicix.model = app_inst.settings.borrow().aicix_model.clone();
-        }
         app_inst.show_page(&initial_page);
         if welcome_seen {
             app_inst.fetch_home();
@@ -335,10 +301,7 @@ impl App {
             marathon_btn: self.marathon_btn.clone(),
             hist_btn: self.hist_btn.clone(),
             settings_btn: self.settings_btn.clone(),
-            aicix_fab: self.aicix_fab.clone(),
             home_acts: self.home_acts.clone(),
-            aicix_state: self.aicix_state.clone(),
-            aicix_panel: self.aicix_panel.clone(),
         })
     }
 
@@ -423,37 +386,6 @@ impl App {
             this.show_page(&Page::Settings);
         });
 
-        let aicix_fab_this = self.clone_ref();
-        self.aicix_fab.connect_clicked(move |_| {
-            {
-                let mut st = aicix_fab_this.page_history.borrow_mut();
-                if st.last() != Some(&Page::Aicix) {
-                    st.push(Page::Aicix);
-                }
-            }
-            aicix_fab_this.show_page(&Page::Aicix);
-            aicix_fab_this.aicix_fab.set_sensitive(false);
-            let step_count = 12u32;
-            let step_ms = 24u64;
-            for i in 1..=step_count {
-                let frac = 1.0 - (i as f64 / step_count as f64);
-                let this = aicix_fab_this.clone_ref();
-                glib::timeout_add_local_once(
-                    std::time::Duration::from_millis(i as u64 * step_ms),
-                    move || {
-                        this.aicix_fab.set_opacity(frac);
-                    },
-                );
-            }
-            let this = aicix_fab_this.clone_ref();
-            glib::timeout_add_local_once(
-                std::time::Duration::from_millis((step_count as u64 * step_ms) + 50),
-                move || {
-                    this.aicix_fab.set_sensitive(true);
-                },
-            );
-        });
-
         {
             let this = self.clone_ref();
             let search_bar = self.search_bar.clone();
@@ -508,11 +440,6 @@ impl App {
         use gtk::prelude::IsA;
         self.progress_bars.borrow_mut().clear();
         self.back_btn.set_sensitive(self.page_history.borrow().len() > 1);
-
-        match page {
-            Page::Aicix => self.aicix_fab.set_opacity(0.0),
-            _ => self.aicix_fab.set_opacity(1.0),
-        }
 
         fn switch<T: IsA<gtk::Widget>>(
             stack: &gtk::Stack,
@@ -576,10 +503,6 @@ impl App {
             Page::Search => {
                 self.title_label.set_text("Arama Sonuçları");
                 switch(&self.stack, "search", gtk::StackTransitionType::SlideLeft, self.build_search_view());
-            }
-            Page::Aicix => {
-                self.title_label.set_text("Aicix · Yapay Zeka Asistan");
-                switch(&self.stack, "aicix", gtk::StackTransitionType::Crossfade, self.build_aicix_view());
             }
             Page::Episodes { title, eps } | Page::Movie { title, eps } => {
                 self.title_label.set_text(&title.name);
@@ -1134,11 +1057,6 @@ impl App {
             move |new_s| {
                 *this_save.settings.borrow_mut() = new_s.clone();
                 this_save.client.save_settings(&new_s);
-                {
-                    let mut aicix = this_save.aicix_state.lock().unwrap();
-                    aicix.api_key = new_s.aicix_api_key.clone();
-                    aicix.model = new_s.aicix_model.clone();
-                }
                 let toast = adw::Toast::new("Ayarlar kaydedildi");
                 toast.set_timeout(3);
                 this_save.toast.add_toast(toast);
@@ -1160,134 +1078,6 @@ impl App {
         );
 
         scroll.set_child(Some(&view));
-        scroll
-    }
-
-    fn build_aicix_view(&self) -> gtk::ScrolledWindow {
-        let scroll = gtk::ScrolledWindow::new();
-        let panel = crate::ui::aicix_panel::AicixPanel::new(self.aicix_state.clone());
-        let entry = panel.input_entry.clone();
-        let send_btn = panel.send_btn.clone();
-        let state = self.aicix_state.clone();
-        let this = self.clone_ref();
-
-        let send_action = Rc::new(move |text: String| {
-            if text.trim().is_empty() { return; }
-            {
-                let mut s = state.lock().unwrap();
-                s.push_user(&text);
-            }
-            let (tx, rx) = std::sync::mpsc::channel::<aicix::StreamEvent>();
-            let client = aicix::AicixClient::new(state.clone());
-            if let Err(e) = client.send_streaming(tx) {
-                let mut s = state.lock().unwrap();
-                s.history.pop();
-                drop(s);
-                let toast = adw::Toast::new(&format!("Aicix: {e}"));
-                toast.set_timeout(4);
-                this.toast.add_toast(toast);
-                return;
-            }
-            let this_c = this.clone_ref();
-            let panel_rc = this.aicix_panel.clone();
-            let mut acc = String::new();
-            let mut tool_handled = false;
-            while let Ok(ev) = rx.recv() {
-                match ev {
-                    aicix::StreamEvent::Content(c) => {
-                        acc.push_str(&c);
-                        let acc_clone = acc.clone();
-                        let opt = panel_rc.borrow();
-                        if let Some(p) = opt.as_ref() {
-                            p.append_streaming_chunk(&acc_clone);
-                        }
-                    }
-                    aicix::StreamEvent::ToolCalls(calls) if !tool_handled => {
-                        tool_handled = true;
-                        let this_d = this_c.clone_ref();
-                        for call in calls {
-                            let result = crate::aicix::executor::execute_tool(&this_d, &call);
-                            let state_inner = this_d.aicix_state.clone();
-                            {
-                                let mut s = state_inner.lock().unwrap();
-                                s.push_tool_result(&call.id, &call.function.name, &result);
-                            }
-                            let (tx2, rx2) = std::sync::mpsc::channel::<aicix::StreamEvent>();
-                            let client2 = aicix::AicixClient::new(state_inner.clone());
-                            if client2.send_streaming(tx2).is_ok() {
-                                let panel_rc2 = panel_rc.clone();
-                                let mut acc2 = String::new();
-                                while let Ok(ev2) = rx2.recv() {
-                                    match ev2 {
-                                        aicix::StreamEvent::Content(c) => {
-                                            acc2.push_str(&c);
-                                            let acc_clone = acc2.clone();
-                                            let opt = panel_rc2.borrow();
-                                            if let Some(p) = opt.as_ref() {
-                                                p.append_streaming_chunk(&acc_clone);
-                                            }
-                                        }
-                                        aicix::StreamEvent::ToolCalls(_) => {}
-                                        aicix::StreamEvent::Done => break,
-                                        aicix::StreamEvent::Error(e) => {
-                                            let toast = adw::Toast::new(&format!("Aicix hata: {e}"));
-                                            toast.set_timeout(4);
-                                            this_d.toast.add_toast(toast);
-                                            break;
-                                        }
-                                    }
-                                }
-                                let opt = panel_rc2.borrow();
-                                if let Some(p) = opt.as_ref() {
-                                    p.finalize_streaming(&acc2);
-                                }
-                            }
-                            break;
-                        }
-                    }
-                    aicix::StreamEvent::Done => {
-                        let opt = panel_rc.borrow();
-                        if let Some(p) = opt.as_ref() {
-                            p.finalize_streaming(&acc);
-                        }
-                        break;
-                    }
-                    aicix::StreamEvent::Error(e) => {
-                        let toast = adw::Toast::new(&format!("Aicix hata: {e}"));
-                        toast.set_timeout(5);
-                        this_c.toast.add_toast(toast);
-                        let opt = panel_rc.borrow();
-                        if let Some(p) = opt.as_ref() {
-                            p.clear_streaming();
-                        }
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-        });
-
-        let send_action_clone = send_action.clone();
-        let entry_c = entry.clone();
-        entry.connect_activate(move |_| {
-            let text = entry_c.text().to_string();
-            if text.trim().is_empty() { return; }
-            entry_c.set_text("");
-            send_action_clone(text);
-        });
-
-        let send_action_clone2 = send_action.clone();
-        let entry_d = entry.clone();
-        send_btn.connect_clicked(move |_| {
-            let text = entry_d.text().to_string();
-            if text.trim().is_empty() { return; }
-            entry_d.set_text("");
-            send_action_clone2(text);
-        });
-
-        *self.aicix_panel.borrow_mut() = Some(panel);
-        let panel_clone = self.aicix_panel.borrow().as_ref().unwrap().root.clone();
-        scroll.set_child(Some(&panel_clone));
         scroll
     }
 

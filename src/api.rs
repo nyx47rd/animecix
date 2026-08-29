@@ -106,14 +106,6 @@ pub struct VideoSource {
     pub episode_count: Option<i64>,
     #[serde(default)]
     pub release_date: Option<String>,
-    #[serde(default)]
-    pub name_english: Option<String>,
-    #[serde(default)]
-    pub name_romanji: Option<String>,
-    #[serde(default)]
-    pub local_vote_average: Option<String>,
-    #[serde(default)]
-    pub local_vote_count: Option<i64>,
 }
 
 impl Title {
@@ -146,10 +138,6 @@ impl Title {
             runtime: r["runtime"].as_i64(),
             episode_count: r["episode_count"].as_i64(),
             release_date: r["release_date"].as_str().map(|s| s.to_string()),
-            name_english: r["name_english"].as_str().map(|s| s.to_string()),
-            name_romanji: r["name_romanji"].as_str().map(|s| s.to_string()),
-            local_vote_average: r["local_vote_average"].as_str().map(|s| s.to_string()),
-            local_vote_count: r["local_vote_count"].as_i64(),
         })
     }
 
@@ -344,10 +332,6 @@ pub struct Settings {
     pub default_fansub_template: Option<i64>,
     #[serde(default = "default_true")]
     pub fansub_ask_each_time: bool,
-    #[serde(default)]
-    pub aicix_api_key: Option<String>,
-    #[serde(default = "default_aicix_model")]
-    pub aicix_model: String,
 }
 fn default_loading() -> String { "overlay".into() }
 fn default_quick_search() -> bool { true }
@@ -356,7 +340,6 @@ fn default_search_shortcut() -> String { "Ctrl+S".into() }
 fn default_true() -> bool { true }
 fn default_upscale() -> String { "hafif".into() }
 fn default_patience() -> u64 { 20 }
-fn default_aicix_model() -> String { "qwen/qwen3.8-27b".to_string() }
 
 pub(crate) fn upscale_mpv_args(upscale: &str, shader_path: Option<&str>) -> Vec<String> {
     match upscale {
@@ -399,8 +382,6 @@ impl Default for Settings {
             source_patience_secs: default_patience(),
             default_fansub_template: None,
             fansub_ask_each_time: true,
-            aicix_api_key: None,
-            aicix_model: default_aicix_model(),
         }
     }
 }
@@ -671,32 +652,6 @@ impl Client {
             }
         }
         Ok(cats)
-    }
-
-    pub fn base_url() -> &'static str {
-        "https://animecix.tv"
-    }
-
-    pub fn fetch_title_json(&self, title_id: u64) -> Result<serde_json::Value, String> {
-        let key = format!("tdetail:{title_id}");
-        self.cache_get(&key, 3600, |http| {
-            http.get(format!("{}/secure/titles/{title_id}", Self::base_url()))
-                .header("Accept", "application/json")
-                .send()
-                .map_err(|e| e.to_string())?
-                .error_for_status()
-                .map_err(|e| e.to_string())?
-                .json()
-                .map_err(|e| e.to_string())
-        })
-    }
-
-    pub fn parse_title_from_json(v: &serde_json::Value) -> Result<Title, String> {
-        let title_obj = v
-            .get("title")
-            .cloned()
-            .ok_or_else(|| "title alanı yok".to_string())?;
-        serde_json::from_value(title_obj).map_err(|e| format!("Title parse: {e}"))
     }
 
     pub fn search(&self, q: &str) -> Result<Vec<Title>, String> {
