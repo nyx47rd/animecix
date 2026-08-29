@@ -1052,14 +1052,21 @@ impl App {
         let this_save = self.clone_ref();
         let this_wipe = self.clone_ref();
 
+        let last_save: Rc<RefCell<std::time::Instant>> = Rc::new(RefCell::new(std::time::Instant::now()));
+        let last_save_c = last_save.clone();
         let view = views::SettingsView::build(
             &settings,
             move |new_s| {
                 *this_save.settings.borrow_mut() = new_s.clone();
                 this_save.client.save_settings(&new_s);
-                let toast = adw::Toast::new("Ayarlar kaydedildi");
-                toast.set_timeout(3);
-                this_save.toast.add_toast(toast);
+                let now = std::time::Instant::now();
+                let elapsed = now.duration_since(*last_save_c.borrow()).as_millis();
+                *last_save_c.borrow_mut() = now;
+                if elapsed >= 400 {
+                    let toast = adw::Toast::new("Ayarlar kaydedildi");
+                    toast.set_timeout(2);
+                    this_save.toast.add_toast(toast);
+                }
             },
             move |remove_app| {
                 this_wipe.client.wipe_all_data();

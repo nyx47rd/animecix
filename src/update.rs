@@ -95,7 +95,37 @@ pub fn replace_target(bytes: &[u8], target: &Path) -> Result<(), String> {
         perms.set_mode(0o755);
         std::fs::set_permissions(&tmp, perms).map_err(|e| e.to_string())?;
     }
-    std::fs::rename(&tmp, target).map_err(|e| e.to_string())?;
+    match std::fs::rename(&tmp, target) {
+        Ok(_) => return Ok(()),
+        Err(_) => {}
+    }
+    let backup = target.with_extension("AppImage.old");
+    if backup.exists() {
+        let _ = std::fs::remove_file(&backup);
+    }
+    if std::fs::rename(target, &backup).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!(
+            "Güncelleme dosyası '{}' yoluna yazılamadı (farklı aygıt veya salt okunur). Eski dosya yedeklenemedi.",
+            target.display()
+        ));
+    }
+    if let Err(e) = std::fs::copy(&tmp, target) {
+        let _ = std::fs::rename(&backup, target);
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("Güncelleme yazılamadı: {e}"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(target) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o755);
+            let _ = std::fs::set_permissions(target, perms);
+        }
+    }
+    let _ = std::fs::remove_file(&tmp);
+    let _ = std::fs::remove_file(&backup);
     Ok(())
 }
 
