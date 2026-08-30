@@ -12,6 +12,20 @@ use adw::prelude::*;
 use gtk::prelude::*;
 use std::process::Command;
 
+const ANIMECIX_PNG_ICON: &[u8] = include_bytes!("../assets/hicolor/256x256/apps/tr.com.animecix.png");
+
+const ANIMECIX_SVG_ICON: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7c3aed"/>
+      <stop offset="1" stop-color="#db2777"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="48" fill="url(#g)"/>
+  <path d="M70 200 L128 56 L186 200 L160 200 L148 168 L108 168 L96 200 Z M116 148 L140 148 L128 116 Z" fill="#ffffff"/>
+</svg>"##;
+
 pub fn restart_app() {
     let exe = std::env::var("APPIMAGE")
         .map(std::path::PathBuf::from)
@@ -541,13 +555,36 @@ pub fn install_desktop_entry() -> Result<(), String> {
 
     let target_icon = format!("{icons_dir}/tr.com.animecix.png");
     let target_icon_simple = format!("{icons_dir_simple}/tr.com.animecix.png");
+    let target_icon_lg = format!("{home}/.local/share/icons/hicolor/512x512/apps/tr.com.animecix.png");
+    let _ = std::fs::create_dir_all(format!("{home}/.local/share/icons/hicolor/512x512/apps"));
+    let target_icon_lg_simple = format!("{icons_dir_simple}/tr.com.animecix.svg");
+    let _ = std::fs::write(&target_icon_lg_simple, ANIMECIX_SVG_ICON.as_bytes());
 
-    if let Ok(content) = std::fs::read("assets/hicolor/256x256/apps/tr.com.animecix.png") {
+    let icon_bytes: Option<Vec<u8>> = None
+        .or_else(|| {
+            let p = std::path::Path::new("assets/hicolor/256x256/apps/tr.com.animecix.png");
+            std::fs::read(p).ok()
+        })
+        .or_else(|| {
+            let p = std::path::Path::new("/usr/share/icons/hicolor/256x256/apps/tr.com.animecix.png");
+            std::fs::read(p).ok()
+        })
+        .or_else(|| {
+            if let Ok(ai) = std::env::var("APPIMAGE") {
+                if !ai.trim().is_empty() {
+                    let p = std::path::Path::new(&ai).parent()
+                        .map(|d| d.join("assets/hicolor/256x256/apps/tr.com.animecix.png"));
+                    if let Some(pp) = p { return std::fs::read(pp).ok(); }
+                }
+            }
+            None
+        })
+        .or_else(|| Some(ANIMECIX_PNG_ICON.to_vec()));
+
+    if let Some(content) = icon_bytes {
         let _ = std::fs::write(&target_icon, &content);
         let _ = std::fs::write(&target_icon_simple, &content);
-    } else if let Ok(content) = std::fs::read("/usr/share/icons/hicolor/256x256/apps/tr.com.animecix.png") {
-        let _ = std::fs::write(&target_icon, &content);
-        let _ = std::fs::write(&target_icon_simple, &content);
+        let _ = std::fs::write(&target_icon_lg, &content);
     }
 
     let desktop_content = format!(

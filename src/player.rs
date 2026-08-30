@@ -57,3 +57,64 @@ pub fn send_mpv_cmd(sock: &str, json_cmd: &str) -> bool {
     stream.set_write_timeout(Some(Duration::from_millis(400))).ok();
     stream.write_all(json_cmd.as_bytes()).is_ok()
 }
+
+pub fn seek_mpv_to(sock: &str, seconds: f64) -> bool {
+    let cmd = format!(
+        r#"{{"command":["set_property","time-pos",{seconds:.3}]}}"#
+    );
+    send_mpv_cmd(sock, &cmd)
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SkipWindows {
+    pub op_start: f64,
+    pub op_end: f64,
+    pub ed_start: f64,
+    pub ed_end: f64,
+    pub episode_length: f64,
+}
+
+pub fn classify_position(sk: &SkipWindows, pos: f64) -> Option<&'static str> {
+    if pos < 0.0 {
+        return None;
+    }
+    if sk.op_end > 0.0 && pos >= sk.op_start && pos < sk.op_end {
+        return Some("op");
+    }
+    if sk.ed_end > 0.0 && pos >= sk.ed_start && pos < sk.ed_end {
+        return Some("ed");
+    }
+    None
+}
+
+#[derive(Debug, Default)]
+pub struct AniSkipState {
+    pub op_skipped: bool,
+    pub ed_skipped: bool,
+    pub windows: Option<SkipWindows>,
+}
+
+pub fn apply_aniskip(sock: &str, state: &mut AniSkipState, pos: f64) -> bool {
+    let Some(win) = state.windows else { return false; };
+    if !state.op_skipped {
+        if let Some(kind) = classify_position(&win, pos) {
+            if kind == "op" {
+                if seek_mpv_to(sock, win.op_end) {
+                    state.op_skipped = true;
+                    return true;
+                }
+            }
+        }
+    }
+    if !state.ed_skipped {
+        if let Some(kind) = classify_position(&win, pos) {
+            if kind == "ed" {
+                if seek_mpv_to(sock, win.ed_end + 1.0) {
+                    state.ed_skipped = true;
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
