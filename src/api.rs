@@ -1550,30 +1550,39 @@ impl Client {
 
         let key = format!("aniskip_v4:{mal_id}:{ep_num}");
         let d = match self.cache_get(&key, 6 * 3600, |http| {
-            let fetch = |http: &crate::http::Http| -> Result<serde_json::Value, String> {
-                http.get(format!("https://aniskip-mirror.vercel.app/v2/skip-times/{mal_id}/{ep_num}?types=op,ed&episodeLength=0"))
+            let endpoints: [(&str, &str); 2] = [
+                ("https://aniskip-mirror-cf.yasar-123-sevda.workers.dev", "cf"),
+                ("https://aniskip-mirror.vercel.app", "vercel"),
+            ];
+            let fetch_one = |http: &crate::http::Http, base: &str| -> Result<serde_json::Value, String> {
+                let url = format!("{base}/v2/skip-times/{mal_id}/{ep_num}?types=op,ed&episodeLength=0");
+                let resp = http.get(url)
                     .timeout(8)
                     .send()
-                    .map_err(|e| e.to_string())?
-                    .error_for_status()
+                    .map_err(|e| e.to_string())?;
+                if resp.status() == 404 {
+                    return Ok(serde_json::json!({"found": false, "results": []}));
+                }
+                resp.error_for_status()
                     .map_err(|e| e.to_string())?
                     .json()
                     .map_err(|e| e.to_string())
             };
-            match fetch(http) {
-                Ok(v) => Ok(v),
-                Err(first) => {
-                    let mut last = first;
-                    for _ in 0..2 {
-                        std::thread::sleep(std::time::Duration::from_millis(400));
-                        match fetch(http) {
-                            Ok(v) => return Ok(v),
-                            Err(e) => last = e,
-                        }
+            let mut last_err = String::new();
+            for (base, label) in endpoints {
+                eprintln!("[ANISKIP] denenenen endpoint: {label} ({base})");
+                match fetch_one(http, base) {
+                    Ok(v) => {
+                        eprintln!("[ANISKIP] {label} OK");
+                        return Ok(v);
                     }
-                    Err(last)
+                    Err(e) => {
+                        eprintln!("[ANISKIP] {label} HATA: {e}, sonraki deneniyor");
+                        last_err = format!("{label}: {e}");
+                    }
                 }
             }
+            Err(last_err)
         }) {
             Ok(val) => val,
             Err(_) => return AniSkipTimes::default(),

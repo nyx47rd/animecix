@@ -46,6 +46,10 @@ impl Resp {
         self.raw.url.clone()
     }
 
+    pub fn status(&self) -> u16 {
+        self.raw.status
+    }
+
     pub fn content_length(&self) -> Option<u64> {
         self.raw.content_length
     }
