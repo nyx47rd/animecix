@@ -221,6 +221,36 @@ Uygulama, ağ gecikmesini azaltmak için aşağıdaki teknikleri kullanır:
 
 ---
 
+## AniSkip Entegrasyonu
+
+AnimeciX, intro ve outro'ları otomatik atlamak için topluluk tarafından işletilen
+**[aniskip-mirror](https://github.com/nyx47rd/aniskip-mirror)** API'sini kullanır.
+Orijinal `api.aniskip.com` servisi 2026'da kullanım dışı kalmıştır (alan adı
+süresi dolmuş, GitHub deposu kaldırılmış), bu yüzden aynı JSON şemasına birebir
+uyumlu kendi mirror altyapımız kullanılır.
+
+**Endpoint'ler** (otomatik failover):
+
+1. **Birincil**: `https://aniskip-mirror-cf.yasar-123-sevda.workers.dev` — Cloudflare Worker
+   (R2 depolama, edge cache, 75.000+ anime verisi)
+2. **Yedek**: `https://aniskip-mirror.vercel.app`
+
+Birincil endpoint 5xx veya timeout dönerse uygulama saydam biçimde yedek'e geçer.
+404 (bölüm verisi yok) her iki endpoint için geçerli yanıt sayılır ve 6 saat
+önbelleğe alınır; sürekli denenmez.
+
+**Davranış**:
+- Bir bölüm başlatıldığında, MPV supervisor thread'i her 250 ms'de `time-pos` okur
+- Pencere AniSkip verisinde tanımlı OP/ED aralığına girdiğinde, MPV'ye `set_property time-pos` ile otomatik seek
+- Atlandığında MPV OSD'de 3 sn `⏩ İntro Atlandı (AniSkip: 0:28 → 1:58)` bildirimi + uygulama toast'ı
+- Ayarlardan kapatılabilir; kapatıldığında `s` / `e` tuşlarıyla manuel atlama hâlâ çalışır
+
+**Şema uyumluluğu**: API, orijinal `aniskip.com` v1 (snake_case) ve v2 (camelCase)
+yanıt yapılarını birebir döndürür. Mevcut istemciler hiçbir değişiklik olmadan
+çalışmaya devam eder.
+
+---
+
 ## Lisans
 
 [MIT](LICENSE) © 2026 nyx47rd
