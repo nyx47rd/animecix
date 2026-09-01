@@ -65,6 +65,14 @@ pub fn seek_mpv_to(sock: &str, seconds: f64) -> bool {
     send_mpv_cmd(sock, &cmd)
 }
 
+pub fn show_text(sock: &str, text: &str, duration_ms: u64) -> bool {
+    let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
+    let cmd = format!(
+        r#"{{"command":["show-text","{escaped}",{duration_ms}]}}"#
+    );
+    send_mpv_cmd(sock, &cmd)
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SkipWindows {
     pub op_start: f64,
@@ -94,27 +102,29 @@ pub struct AniSkipState {
     pub windows: Option<SkipWindows>,
 }
 
-pub fn apply_aniskip(sock: &str, state: &mut AniSkipState, pos: f64) -> bool {
-    let Some(win) = state.windows else { return false; };
+#[derive(Debug, Clone, Copy)]
+pub enum SkipOutcome {
+    Op { from: f64, to: f64 },
+    Ed { from: f64, to: f64 },
+}
+
+pub fn apply_aniskip(sock: &str, state: &mut AniSkipState, pos: f64) -> Option<SkipOutcome> {
+    let win = state.windows?;
     if !state.op_skipped {
         if let Some(kind) = classify_position(&win, pos) {
-            if kind == "op" {
-                if seek_mpv_to(sock, win.op_end) {
-                    state.op_skipped = true;
-                    return true;
-                }
+            if kind == "op" && seek_mpv_to(sock, win.op_end) {
+                state.op_skipped = true;
+                return Some(SkipOutcome::Op { from: win.op_start, to: win.op_end });
             }
         }
     }
     if !state.ed_skipped {
         if let Some(kind) = classify_position(&win, pos) {
-            if kind == "ed" {
-                if seek_mpv_to(sock, win.ed_end + 1.0) {
-                    state.ed_skipped = true;
-                    return true;
-                }
+            if kind == "ed" && seek_mpv_to(sock, win.ed_end + 1.0) {
+                state.ed_skipped = true;
+                return Some(SkipOutcome::Ed { from: win.ed_start, to: win.ed_end + 1.0 });
             }
         }
     }
-    false
+    None
 }

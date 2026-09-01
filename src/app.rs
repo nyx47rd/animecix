@@ -2167,8 +2167,21 @@ impl App {
                                 let pos = crate::player::query_mpv_prop(&sock_path_c, "time-pos").unwrap_or(-1.0);
                                 if pos >= 0.0 {
                                     let mut st = aniskip_state_c.lock().unwrap();
-                                    if crate::player::apply_aniskip(&sock_path_c, &mut st, pos) {
-                                        let _ = toast_tx_c.send("⏭ AniSkip: bölüm atlandı".to_string());
+                                    if let Some(outcome) = crate::player::apply_aniskip(&sock_path_c, &mut st, pos) {
+                                        let fmt = |s: f64| -> String {
+                                            let s = s as u64;
+                                            if s >= 3600 { format!("{}:{:02}:{:02}", s/3600, (s%3600)/60, s%60) }
+                                            else { format!("{}:{:02}", s/60, s%60) }
+                                        };
+                                        let (label, from, to) = match outcome {
+                                            crate::player::SkipOutcome::Op { from, to } =>
+                                                ("İntro", from, to),
+                                            crate::player::SkipOutcome::Ed { from, to } =>
+                                                ("Outro", from, to),
+                                        };
+                                        let osd = format!("⏩ {} Atlandı (AniSkip: {} → {})", label, fmt(from), fmt(to));
+                                        let _ = crate::player::show_text(&sock_path_c, &osd, 3000);
+                                        let _ = toast_tx_c.send(format!("⏭ AniSkip: {} atlandı", label.to_lowercase()));
                                     }
                                 }
                             }
