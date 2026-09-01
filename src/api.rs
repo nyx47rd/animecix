@@ -1551,7 +1551,7 @@ impl Client {
         let key = format!("aniskip_v4:{mal_id}:{ep_num}");
         let d = match self.cache_get(&key, 6 * 3600, |http| {
             let fetch = |http: &crate::http::Http| -> Result<serde_json::Value, String> {
-                http.get(format!("https://api.aniskip.com/v2/skip-times/{mal_id}/{ep_num}?types=op&types=ed&episodeLength=0"))
+                http.get(format!("https://aniskip-mirror.vercel.app/v2/skip-times/{mal_id}/{ep_num}?types=op,ed&episodeLength=0"))
                     .timeout(8)
                     .send()
                     .map_err(|e| e.to_string())?
