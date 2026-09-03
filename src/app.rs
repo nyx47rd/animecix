@@ -1793,8 +1793,6 @@ impl App {
 
         let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
         let current_shared = std::sync::Arc::new(std::sync::Mutex::new((episode, season)));
-        let aniskip_state = std::sync::Arc::new(std::sync::Mutex::new(crate::player::AniSkipState::default()));
-        let aniskip_attempted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         let mpv_child = std::sync::Arc::new(std::sync::Mutex::new(None::<std::process::Child>));
 
@@ -2010,10 +2008,6 @@ impl App {
             let patience_c = self.client.load_settings().source_patience_secs.max(10);
             let total = candidates.len() + fallback_embeds_c.len();
             let aniskip_enabled_c = aniskip_enabled;
-            let aniskip_state_c = aniskip_state.clone();
-            let aniskip_attempted_c = aniskip_attempted.clone();
-            let ep_num_c = episode;
-            let title_name_outer = title.name.clone();
             let use_proxy = std::net::TcpStream::connect_timeout(
                 &"127.0.0.1:10808".parse().expect("statik adres"),
                 std::time::Duration::from_millis(300),
@@ -2127,63 +2121,6 @@ impl App {
                             let dur = crate::player::query_mpv_prop(&sock_path_c, "duration").unwrap_or(0.0);
                             if dur > 0.0 {
                                 media_loaded = true;
-                            }
-                            if aniskip_enabled_c
-                                && !aniskip_attempted_c.load(std::sync::atomic::Ordering::SeqCst)
-                            {
-                                aniskip_attempted_c.store(true, std::sync::atomic::Ordering::SeqCst);
-                                let client_sk = client_fb.clone();
-                                let state_sk = aniskip_state_c.clone();
-                                let title_name_c = title_name_outer.clone();
-                                let ep_c = ep_num_c;
-                                let sock_c = sock_path_c.clone();
-                                let toast_tx_sk = toast_tx_c.clone();
-                                std::thread::spawn(move || {
-                                    let t = client_sk.fetch_aniskip_timestamps(&title_name_c, ep_c);
-                                    let op_start = t.op_start.unwrap_or(0.0);
-                                    let op_end = t.op_end.unwrap_or(0.0);
-                                    let ed_start = t.ed_start.unwrap_or(0.0);
-                                    let ed_end = t.ed_end.unwrap_or(0.0);
-                                    if op_end > 0.0 || ed_end > 0.0 {
-                                        let pos = crate::player::query_mpv_prop(&sock_c, "time-pos").unwrap_or(0.0);
-                                        let win = crate::player::SkipWindows {
-                                            op_start, op_end, ed_start, ed_end, episode_length: 0.0,
-                                        };
-                                        if let Some(kind) = crate::player::classify_position(&win, pos) {
-                                            if kind == "op" && op_end > 0.0 {
-                                                let _ = crate::player::seek_mpv_to(&sock_c, op_end);
-                                                let _ = toast_tx_sk.send("⏭ AniSkip: intro atlandı".to_string());
-                                            }
-                                        }
-                                    }
-                                    if let Ok(mut s) = state_sk.lock() {
-                                        s.windows = Some(crate::player::SkipWindows {
-                                            op_start, op_end, ed_start, ed_end, episode_length: 0.0,
-                                        });
-                                    }
-                                });
-                            }
-                            if aniskip_enabled_c {
-                                let pos = crate::player::query_mpv_prop(&sock_path_c, "time-pos").unwrap_or(-1.0);
-                                if pos >= 0.0 {
-                                    let mut st = aniskip_state_c.lock().unwrap();
-                                    if let Some(outcome) = crate::player::apply_aniskip(&sock_path_c, &mut st, pos) {
-                                        let fmt = |s: f64| -> String {
-                                            let s = s as u64;
-                                            if s >= 3600 { format!("{}:{:02}:{:02}", s/3600, (s%3600)/60, s%60) }
-                                            else { format!("{}:{:02}", s/60, s%60) }
-                                        };
-                                        let (label, from, to) = match outcome {
-                                            crate::player::SkipOutcome::Op { from, to } =>
-                                                ("İntro", from, to),
-                                            crate::player::SkipOutcome::Ed { from, to } =>
-                                                ("Outro", from, to),
-                                        };
-                                        let osd = format!("⏩ {} Atlandı (AniSkip: {} → {})", label, fmt(from), fmt(to));
-                                        let _ = crate::player::show_text(&sock_path_c, &osd, 3000);
-                                        let _ = toast_tx_c.send(format!("⏭ AniSkip: {} atlandı", label.to_lowercase()));
-                                    }
-                                }
                             }
                             let elapsed_secs = start.elapsed().as_secs();
                             if Self::source_is_dead(elapsed_secs, idle >= 1.0, dur, media_loaded, patience_c) {
