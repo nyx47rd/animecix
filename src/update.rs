@@ -50,16 +50,6 @@ pub fn needs_update(current: &str, latest: &str) -> bool {
     false
 }
 
-pub fn parse_release_json(json: &str) -> Option<(String, String)> {
-    let rel: GithubRelease = serde_json::from_str(json).ok()?;
-    let url = rel
-        .assets
-        .iter()
-        .find(|a| a.name == ASSET_NAME)
-        .map(|a| a.browser_download_url.clone())?;
-    Some((rel.tag_name, url))
-}
-
 fn http_client() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .user_agent("animecix-updater")
@@ -411,15 +401,6 @@ mod tests {
         assert!(!needs_update("3.0.0", "3.0.0"));
         assert!(!needs_update("v3.0.0", "3.0.0"));
         assert!(needs_update("3.0.0", "v3.0.1"));
-    }
-
-    #[test]
-    fn parse_asset() {
-        let json = r#"{"tag_name":"v3.1.0","assets":[{"name":"other.txt","browser_download_url":"http://x/other"},{"name":"AnimeciX-x86_64.AppImage","browser_download_url":"http://x/AnimeciX-x86_64.AppImage"}]}"#;
-        let (tag, url) = parse_release_json(json).unwrap();
-        assert_eq!(tag, "v3.1.0");
-        assert_eq!(url, "http://x/AnimeciX-x86_64.AppImage");
-        assert!(parse_release_json(r#"{"tag_name":"v1","assets":[]}"#).is_none());
     }
 
     #[test]

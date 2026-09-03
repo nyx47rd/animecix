@@ -3,10 +3,10 @@ use adw::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use gtk::gio;
 
-use crate::api::{self, Client, Episode, State, Title};
+use crate::api::{self, Client, Episode, Title};
 use crate::covers::CoverManager;
 
 use crate::ui::components;
@@ -1935,7 +1935,6 @@ impl App {
             let progress2 = progress.clone();
             let progress_bars2 = progress_bars.clone();
             let client_prog = client.clone();
-            let pk = prog_key.clone();
             let receiver = std::sync::Arc::new(std::sync::Mutex::new(receiver));
             let current_shared_t = current_shared.clone();
             let mut marked_ep: Option<(u64, u64)> = None;
@@ -2007,7 +2006,6 @@ impl App {
             let tid_c = title.id;
             let patience_c = self.client.load_settings().source_patience_secs.max(10);
             let total = candidates.len() + fallback_embeds_c.len();
-            let aniskip_enabled_c = aniskip_enabled;
             let use_proxy = std::net::TcpStream::connect_timeout(
                 &"127.0.0.1:10808".parse().expect("statik adres"),
                 std::time::Duration::from_millis(300),

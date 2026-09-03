@@ -57,11 +57,3 @@ pub fn send_mpv_cmd(sock: &str, json_cmd: &str) -> bool {
     stream.set_write_timeout(Some(Duration::from_millis(400))).ok();
     stream.write_all(json_cmd.as_bytes()).is_ok()
 }
-
-pub fn show_text(sock: &str, text: &str, duration_ms: u64) -> bool {
-    let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
-    let cmd = format!(
-        r#"{{"command":["show-text","{escaped}",{duration_ms}]}}"#
-    );
-    send_mpv_cmd(sock, &cmd)
-}

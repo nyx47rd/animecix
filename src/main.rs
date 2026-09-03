@@ -9,7 +9,6 @@ mod vpn;
 
 use app::App;
 use adw::prelude::*;
-use gtk::prelude::*;
 use std::process::Command;
 
 const ANIMECIX_PNG_ICON: &[u8] = include_bytes!("../assets/hicolor/256x256/apps/tr.com.animecix.png");

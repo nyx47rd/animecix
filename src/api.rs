@@ -4,7 +4,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-pub const UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 const BASE: &str = "https://animecix.tv";
 const TAU: &str = "https://tau-video.xyz";
 const API_TTL_SECS: u64 = 3 * 3600;
@@ -71,15 +70,6 @@ pub struct FansubMirror {
     pub url: String,
     pub quality: Option<String>,
     pub approved: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct VideoSource {
-    pub host: String,
-    pub votes: i64,
-    pub points: f64,
-    pub embed_url: String,
-    pub quality: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -475,16 +465,6 @@ impl Client {
             .get(&template_id)
             .map(|t| t.name.clone())
     }
-
-    pub fn list_translators(&self) -> Vec<TranslatorMeta> {
-        self.translators
-            .lock()
-            .unwrap()
-            .values()
-            .cloned()
-            .collect()
-    }
-
 
     fn api_cache_path(&self, key: &str) -> PathBuf {
         let safe: String = key.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
@@ -1394,92 +1374,8 @@ impl Client {
         Ok(found.into_iter().map(|(_, url)| url).collect())
     }
 
-    pub fn list_sources(&self, title_id: u64, episode: u64, season: u64) -> Result<Vec<VideoSource>, String> {
-        let key = format!("evp:{title_id}:{season}:{episode}");
-        let d = self.cache_get(&key, 1800, |http| {
-            http.get(format!("{BASE}/secure/episode-videos-points"))
-                .header("Accept", "application/json")
-                .query(&[
-                    ("titleId", &title_id.to_string()),
-                    ("episode", &episode.to_string()),
-                    ("season", &season.to_string()),
-                ])
-                .send()
-                .map_err(|e| e.to_string())?
-                .error_for_status()
-                .map_err(|e| e.to_string())?
-                .json()
-                .map_err(|e| e.to_string())
-        })?;
-        let videos = d["videos"].as_array().cloned().unwrap_or_default();
-        if videos.is_empty() {
-            return Err("Kaynak bulunamadı".to_string());
-        }
-        let points = &d["translatorPoints"];
-
-        let mut sources: Vec<VideoSource> = Vec::new();
-        for v in &videos {
-            let url = v["url"].as_str().unwrap_or("").to_string();
-            if url.is_empty() { continue; }
-            let votes = v["positive_votes"].as_i64().unwrap_or(0);
-            let tpl = v["template"].as_i64().unwrap_or(0);
-            let pts = points[tpl.to_string()].as_f64().unwrap_or(0.0);
-            let host = Self::extract_host(&url);
-            sources.push(VideoSource {
-                host,
-                votes,
-                points: pts,
-                embed_url: url,
-                quality: String::new(),
-            });
-        }
-        sources.sort_by(|a, b| {
-            b.points.partial_cmp(&a.points).unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| b.votes.cmp(&a.votes))
-        });
-        Ok(sources)
-    }
-
-    pub fn list_movie_sources(&self, title_id: u64) -> Result<Vec<VideoSource>, String> {
-        let d = self.movie_videos(title_id)?;
-        let mut sources: Vec<VideoSource> = Vec::new();
-        if let Some(data) = d["data"].as_array() {
-            for v in data {
-                if v["category"].as_str() != Some("full") { continue; }
-                let url = v["url"].as_str().unwrap_or("").to_string();
-                if url.is_empty() { continue; }
-                let votes = v["positive_votes"].as_i64().unwrap_or(0);
-                let host = Self::extract_host(&url);
-                sources.push(VideoSource {
-                    host,
-                    votes,
-                    points: 0.0,
-                    embed_url: url,
-                    quality: String::new(),
-                });
-            }
-        }
-        sources.sort_by(|a, b| b.votes.cmp(&a.votes));
-        if sources.is_empty() {
-            return Err("Film kaynağı bulunamadı".to_string());
-        }
-        Ok(sources)
-    }
-
     pub fn resolve_single(&self, embed_url: &str) -> Result<String, String> {
         self.resolve_embed(embed_url)
-    }
-
-    fn extract_host(url: &str) -> String {
-        url.split("//").nth(1)
-            .unwrap_or(url)
-            .split('/')
-            .next()
-            .unwrap_or(url)
-            .split('.')
-            .next()
-            .unwrap_or("unknown")
-            .to_string()
     }
 
     pub fn resolve_mal_id(&self, anime_name: &str) -> Option<u64> {

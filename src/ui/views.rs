@@ -4,7 +4,6 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use crate::api::{Client, HistoryEntry, Settings, Title};
 use crate::ui::episodes_view;
-use gio::prelude::*;
 
 pub(crate) fn show_info_dialog(parent: Option<&gtk::Window>, heading: &str, body: &str) {
     let dialog = adw::MessageDialog::builder()
