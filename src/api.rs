@@ -331,27 +331,58 @@ fn default_true() -> bool { true }
 fn default_upscale() -> String { "hafif".into() }
 fn default_patience() -> u64 { 20 }
 
-pub(crate) fn upscale_mpv_args(upscale: &str, shader_path: Option<&str>) -> Vec<String> {
+/// Upscale için mpv argümanlarını üretir.
+///
+/// `video_height` biliniyorsa (mpv açılmadan önceki metadata) akıllı skip uygular:
+///   - video >= 1080p ise shader (hafif/ultra/hafif_keskin) GPU'yu boşa yakar,
+///     sadece hafif_keskin ise unsharp vf uygulanır (shader atlanır).
+///   - video < 1080p ise normal akış: shader + unsharp.
+pub(crate) fn upscale_mpv_args(
+    upscale: &str,
+    shader_path: Option<&str>,
+    video_height: Option<u32>,
+) -> Vec<String> {
+    let skip_shader = matches!(video_height, Some(h) if h >= 1080)
+        && matches!(upscale, "hafif" | "ultra" | "hafif_keskin");
+
     match upscale {
         "sharp" => vec![
             "--scale=ewa_lanczossharp".into(),
             "--cscale=ewa_lanczossharp".into(),
         ],
-        "hafif" => match shader_path {
-            Some(p) => vec![format!("--glsl-shaders={p}")],
-            None => Vec::new(),
-        },
-        "ultra" => match shader_path {
-            Some(p) => vec![format!("--glsl-shaders={p}")],
-            None => Vec::new(),
-        },
-        "hafif_keskin" => match shader_path {
-            Some(p) => vec![
-                format!("--glsl-shaders={p}"),
-                "--vf=unsharp=5:5:1.0:5:5:0.4".into(),
-            ],
-            None => vec!["--vf=unsharp=5:5:1.0:5:5:0.4".into()],
-        },
+        "hafif" => {
+            if skip_shader {
+                Vec::new()
+            } else {
+                match shader_path {
+                    Some(p) => vec![format!("--glsl-shaders={p}")],
+                    None => Vec::new(),
+                }
+            }
+        }
+        "ultra" => {
+            if skip_shader {
+                Vec::new()
+            } else {
+                match shader_path {
+                    Some(p) => vec![format!("--glsl-shaders={p}")],
+                    None => Vec::new(),
+                }
+            }
+        }
+        "hafif_keskin" => {
+            if skip_shader {
+                vec!["--vf=unsharp=5:5:1.0:5:5:0.4".into()]
+            } else {
+                match shader_path {
+                    Some(p) => vec![
+                        format!("--glsl-shaders={p}"),
+                        "--vf=unsharp=5:5:1.0:5:5:0.4".into(),
+                    ],
+                    None => vec!["--vf=unsharp=5:5:1.0:5:5:0.4".into()],
+                }
+            }
+        }
         _ => Vec::new(),
     }
 }
@@ -2245,23 +2276,68 @@ mod tests {
 
     #[test]
     fn upscale_mpv_args_modes() {
-        assert!(super::upscale_mpv_args("off", None).is_empty());
-        assert!(super::upscale_mpv_args("kapali", None).is_empty());
-        let sharp = super::upscale_mpv_args("sharp", None);
+        // video_height None = bilinmiyor, eski davranış (shader'lar yüklenir)
+        assert!(super::upscale_mpv_args("off", None, None).is_empty());
+        assert!(super::upscale_mpv_args("kapali", None, None).is_empty());
+        let sharp = super::upscale_mpv_args("sharp", None, None);
         assert!(sharp.iter().any(|a| a == "--scale=ewa_lanczossharp"));
         assert!(sharp.iter().any(|a| a == "--cscale=ewa_lanczossharp"));
         assert!(!sharp.iter().any(|a| a.contains("dsharpen")));
-        assert!(super::upscale_mpv_args("hafif", None).is_empty());
-        assert!(super::upscale_mpv_args("ultra", None).is_empty());
-        let hk_none = super::upscale_mpv_args("hafif_keskin", None);
+        assert!(super::upscale_mpv_args("hafif", None, None).is_empty());
+        assert!(super::upscale_mpv_args("ultra", None, None).is_empty());
+        let hk_none = super::upscale_mpv_args("hafif_keskin", None, None);
         assert!(hk_none.iter().any(|a| a.starts_with("--vf=unsharp")));
-        let ak = super::upscale_mpv_args("ultra", Some("/p/Anime4K.glsl"));
+        let ak = super::upscale_mpv_args("ultra", Some("/p/Anime4K.glsl"), None);
         assert_eq!(ak, vec!["--glsl-shaders=/p/Anime4K.glsl".to_string()]);
-        let ak2 = super::upscale_mpv_args("hafif", Some("/p/Anime4K.glsl"));
+        let ak2 = super::upscale_mpv_args("hafif", Some("/p/Anime4K.glsl"), None);
         assert_eq!(ak2, vec!["--glsl-shaders=/p/Anime4K.glsl".to_string()]);
-        let ak3 = super::upscale_mpv_args("hafif_keskin", Some("/p/Anime4K.glsl"));
+        let ak3 = super::upscale_mpv_args("hafif_keskin", Some("/p/Anime4K.glsl"), None);
         assert!(ak3.iter().any(|a| a == "--glsl-shaders=/p/Anime4K.glsl"));
         assert!(ak3.iter().any(|a| a.starts_with("--vf=unsharp")));
+    }
+
+    #[test]
+    fn upscale_smart_skip_for_1080p_source() {
+        // 1080p+ kaynakta shader atlanır, hafif_keskin yine de unsharp uygular
+        let h = 1080u32;
+        // hafif: shader atlanır, hiç arg üretilmez
+        let r = super::upscale_mpv_args("hafif", Some("/p/A4K.glsl"), Some(h));
+        assert!(r.is_empty(), "1080p hafif upscale no-op olmalı: {r:?}");
+        // ultra: shader atlanır
+        let r = super::upscale_mpv_args("ultra", Some("/p/A4K.glsl"), Some(h));
+        assert!(r.is_empty(), "1080p ultra upscale no-op olmalı: {r:?}");
+        // hafif_keskin: shader atlanır AMA unsharp korunur
+        let r = super::upscale_mpv_args("hafif_keskin", Some("/p/A4K.glsl"), Some(h));
+        assert_eq!(r.len(), 1, "1080p hafif_keskin sadece unsharp üretmeli");
+        assert!(r[0].starts_with("--vf=unsharp="), "beklenen unsharp: {}", r[0]);
+        assert!(!r.iter().any(|a| a.contains("glsl-shaders")), "shader 1080p'te atlanmalı");
+        // sharp: çözünürlükten bağımsız, ewa_lanczossharp uygulanır (zaten upscale değil, scale algoritması)
+        let r = super::upscale_mpv_args("sharp", None, Some(h));
+        assert!(r.iter().any(|a| a == "--scale=ewa_lanczossharp"));
+    }
+
+    #[test]
+    fn upscale_smart_skip_below_1080p_loads_shader() {
+        // 720p kaynakta shader yüklenir
+        let h = 720u32;
+        let r = super::upscale_mpv_args("hafif", Some("/p/A4K.glsl"), Some(h));
+        assert_eq!(r, vec!["--glsl-shaders=/p/A4K.glsl".to_string()]);
+        let r = super::upscale_mpv_args("ultra", Some("/p/A4K.glsl"), Some(h));
+        assert_eq!(r, vec!["--glsl-shaders=/p/A4K.glsl".to_string()]);
+        let r = super::upscale_mpv_args("hafif_keskin", Some("/p/A4K.glsl"), Some(h));
+        assert_eq!(r.len(), 2);
+        assert!(r.iter().any(|a| a == "--glsl-shaders=/p/A4K.glsl"));
+        assert!(r.iter().any(|a| a.starts_with("--vf=unsharp=")));
+    }
+
+    #[test]
+    fn upscale_smart_skip_4k_same_as_1080p() {
+        // 4K = 2160p, 1080p+ kategorisinde
+        let r = super::upscale_mpv_args("hafif", Some("/p/A4K.glsl"), Some(2160));
+        assert!(r.is_empty());
+        let r = super::upscale_mpv_args("hafif_keskin", Some("/p/A4K.glsl"), Some(2160));
+        assert_eq!(r.len(), 1);
+        assert!(r[0].starts_with("--vf=unsharp="));
     }
 
     #[test]

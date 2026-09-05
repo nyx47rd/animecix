@@ -6,26 +6,42 @@ cd "$SCRIPT_DIR"
 
 echo "==> AnimeciX AppImage Oluşturuluyor..."
 
-# 0. Sürüm numarasını otomatik 0.0.1 artır (Cargo.toml)
-#    Patch 9'dan taşarsa minor artar, minor 9'dan taşarsa major artar.
+# 0. Sürüm numarası:
+#    - VERSION_BUMP=patch|minor|major env ile (default: patch, +0.0.1)
+#    - minor = +0.1.0, major = +1.0.0
 OLD_VER=$(grep -m1 '^version =' Cargo.toml | cut -d '"' -f2)
 MAJOR=$(echo "$OLD_VER" | cut -d. -f1)
 MINOR=$(echo "$OLD_VER" | cut -d. -f2)
 PATCH=$(echo "$OLD_VER" | cut -d. -f3)
-NEW_PATCH=$((PATCH + 1))
-if [ "$NEW_PATCH" -gt 9 ]; then
+
+case "${VERSION_BUMP:-patch}" in
+  major)
+    NEW_MAJOR=$((MAJOR + 1))
+    NEW_MINOR=0
     NEW_PATCH=0
+    ;;
+  minor)
+    NEW_MAJOR=$MAJOR
     NEW_MINOR=$((MINOR + 1))
-    if [ "$NEW_MINOR" -gt 9 ]; then
-        NEW_MINOR=0
-        NEW_MAJOR=$((MAJOR + 1))
+    NEW_PATCH=0
+    ;;
+  patch|*)
+    NEW_PATCH=$((PATCH + 1))
+    if [ "$NEW_PATCH" -gt 9 ]; then
+        NEW_PATCH=0
+        NEW_MINOR=$((MINOR + 1))
+        if [ "$NEW_MINOR" -gt 9 ]; then
+            NEW_MINOR=0
+            NEW_MAJOR=$((MAJOR + 1))
+        else
+            NEW_MAJOR=$MAJOR
+        fi
     else
         NEW_MAJOR=$MAJOR
+        NEW_MINOR=$MINOR
     fi
-else
-    NEW_MAJOR=$MAJOR
-    NEW_MINOR=$MINOR
-fi
+    ;;
+esac
 NEW_VER="${NEW_MAJOR}.${NEW_MINOR}.${NEW_PATCH}"
 
 sed -i "0,/^version = .*/s//version = \"$NEW_VER\"/" Cargo.toml

@@ -626,7 +626,7 @@ API istekleri de tünel üzerinden gider (ISS engellerini tamamen aşar).\n\
         img_group.set_title("Görüntü İyileştirme");
         let upscale_row = adw::ComboRow::new();
         upscale_row.set_title("Görüntü İyileştirme");
-        upscale_row.set_subtitle("Düşük çözünürlüklü kaynağı yukarı ölçekler");
+        upscale_row.set_subtitle("Düşük çözünürlüklü kaynağı yukarı ölçekler (1080p+ kaynaklarda sadece 'Keskinleştir' etkilidir)");
         let upscale_model = gtk::StringList::new(&[
             "Kapalı",
             "Keskinleştir",

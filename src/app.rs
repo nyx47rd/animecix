@@ -2085,7 +2085,7 @@ impl App {
                             "ultra" => resolve_upscale_shader("Anime4K_Upscale_CNN_x2_UL.glsl"),
                             "hafif_keskin" => resolve_upscale_shader("Anime4K_Upscale_DTD_x2.glsl"),
                             _ => None,
-                        }.as_deref()))
+                        }.as_deref(), None))
                         .arg(url.as_str());
                     if url.contains("video.sibnet.ru/v/") {
                         let vid = url
