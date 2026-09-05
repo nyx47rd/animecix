@@ -43,6 +43,9 @@ fn main() {
         libc::mallopt(libc::M_ARENA_MAX, 2);
     }
     let raw_args: Vec<String> = std::env::args().collect();
+    if raw_args.iter().any(|a| a == "--check-shaders") {
+        return cmd_check_shaders();
+    }
     let mut filtered: Vec<String> = Vec::new();
     let mut it = raw_args.iter();
     if let Some(p) = it.next() {
@@ -716,5 +719,53 @@ mod tests {
             desktop_exec_target("/home/x"),
             "/home/x/.local/bin/animecix"
         );
+    }
+}
+
+fn cmd_check_shaders() {
+    let shaders = [
+        ("Anime4K_Upscale_DTD_x2.glsl", "hafif / hafif_keskin"),
+        ("Anime4K_Upscale_CNN_x2_UL.glsl", "ultra"),
+        ("Anime4K_Upscale_CNN_x2_M.glsl", "(yedek)"),
+        ("Anime4K_Upscale_Original_x2.glsl", "(yedek)"),
+    ];
+    println!("AnimeciX upscale shader doğrulaması");
+    println!("===================================");
+    let mut ok = 0u32;
+    let mut fail = 0u32;
+    for (name, mode) in &shaders {
+        match app::resolve_upscale_shader(name) {
+            Some(p) => {
+                let exists = std::path::Path::new(&p).exists();
+                let size = if exists {
+                    std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0)
+                } else {
+                    0
+                };
+                let head = if exists {
+                    std::fs::read_to_string(&p)
+                        .ok()
+                        .and_then(|s| s.lines().next().map(|l| l.to_string()))
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                let status = if exists && size > 1000 { "OK" } else { "MISSING/EMPTY" };
+                if status == "OK" { ok += 1; } else { fail += 1; }
+                println!(
+                    "  [{status:5}] {name:38} mode={mode:22} size={size:7}B  head={head:.60}"
+                );
+                println!("           path: {p}");
+            }
+            None => {
+                fail += 1;
+                println!("  [NONE ] {name} (gömülü içerik bulunamadı)");
+            }
+        }
+    }
+    println!("===================================");
+    println!("Sonuç: {ok} OK, {fail} hata");
+    if fail > 0 {
+        std::process::exit(1);
     }
 }

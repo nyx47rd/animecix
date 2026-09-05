@@ -74,7 +74,43 @@ pub struct App {
     pub home_acts: Rc<RefCell<Vec<Option<usize>>>>,
 }
 
-fn resolve_upscale_shader(name: &str) -> Option<String> {
+pub(crate) fn resolve_upscale_shader(name: &str) -> Option<String> {
+    use std::sync::OnceLock;
+    use std::sync::Mutex;
+
+    // Embedded shader içeriği (binary'ye gömülü, AppImage extract'ten bağımsız).
+    fn embedded(name: &str) -> Option<&'static str> {
+        match name {
+            "Anime4K_Upscale_CNN_x2_M.glsl" => Some(include_str!("../assets/upscale/Anime4K_Upscale_CNN_x2_M.glsl")),
+            "Anime4K_Upscale_CNN_x2_UL.glsl" => Some(include_str!("../assets/upscale/Anime4K_Upscale_CNN_x2_UL.glsl")),
+            "Anime4K_Upscale_DTD_x2.glsl" => Some(include_str!("../assets/upscale/Anime4K_Upscale_DTD_x2.glsl")),
+            "Anime4K_Upscale_Original_x2.glsl" => Some(include_str!("../assets/upscale/Anime4K_Upscale_Original_x2.glsl")),
+            _ => None,
+        }
+    }
+
+    // Her isim için sadece bir kez temp'e yaz.
+    static CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(p) = cache.lock().unwrap().get(name).cloned() {
+        if std::path::Path::new(&p).exists() {
+            return Some(p);
+        }
+    }
+
+    // Gömülü içeriği temp'e yaz.
+    if let Some(src) = embedded(name) {
+        let dir = std::env::temp_dir().join("animecix-upscale");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(name);
+        if std::fs::write(&path, src).is_ok() {
+            let p = path.to_string_lossy().into_owned();
+            cache.lock().unwrap().insert(name.to_string(), p.clone());
+            return Some(p);
+        }
+    }
+
+    // Fallback: disk üzerinde ara (dev/Flatpak/sistem kurulumları için).
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
     if let Ok(ad) = std::env::var("APPDIR") {
         if !ad.is_empty() {
@@ -91,10 +127,6 @@ fn resolve_upscale_shader(name: &str) -> Option<String> {
             candidates.push(parent.join("assets/upscale").join(name));
             candidates.push(parent.join("../../assets/upscale").join(name));
         }
-    }
-    #[cfg(test)]
-    if let Some(d) = option_env!("CARGO_MANIFEST_DIR") {
-        candidates.push(std::path::Path::new(d).join("assets/upscale").join(name));
     }
     candidates.into_iter().find(|p| p.exists()).map(|p| p.to_string_lossy().into_owned())
 }
