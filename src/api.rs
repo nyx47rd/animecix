@@ -2090,13 +2090,23 @@ impl Client {
 
     pub fn watched_episode_count(&self, tid: u64) -> u64 {
         let st = self.load_state();
+        let mut seen: HashSet<(u64, u64)> = HashSet::new();
+        if let Some(list) = st.watched.get(&tid.to_string()) {
+            for w in list {
+                seen.insert((w.season, w.episode));
+            }
+        }
         let prefix = format!("{tid}:");
-        let mut seen: HashSet<(String, String)> = HashSet::new();
-        for key in st.progress.keys() {
+        for (key, (pos, dur)) in &st.progress {
+            if !Self::played_enough(*pos, *dur) {
+                continue;
+            }
             if let Some(rest) = key.strip_prefix(&prefix) {
                 let mut it = rest.split(':');
                 if let (Some(s), Some(e)) = (it.next(), it.next()) {
-                    seen.insert((s.to_string(), e.to_string()));
+                    if let (Ok(s), Ok(e)) = (s.parse::<u64>(), e.parse::<u64>()) {
+                        seen.insert((s, e));
+                    }
                 }
             }
         }
@@ -2640,6 +2650,59 @@ mod tests {
         c.remove_watched(tid, 0, 2);
         let mut st = c.load_state();
         st.current = None;
+        c.save_state(&st);
+    }
+
+    #[test]
+    fn watched_count_reflects_manual_marks() {
+        use_isolated_state();
+        let _g = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let c = Client::new();
+        let tid: u64 = 999_992;
+
+        c.remove_watched(tid, 0, 1);
+        c.remove_watched(tid, 0, 2);
+        c.remove_watched(tid, 0, 3);
+        assert_eq!(c.watched_episode_count(tid), 0, "başlangıçta sayaç sıfır olmalı");
+
+        c.save_watched(&Watched { title_id: tid, episode: 1, season: 0 }, "");
+        assert_eq!(c.watched_episode_count(tid), 1, "manuel izlendi işareti progress olmadan sayılmalı (maraton barı)");
+
+        c.save_progress(tid, 0, 2, 5.0, 100.0);
+        assert_eq!(c.watched_episode_count(tid), 1, "kısmi oynatma (<%90) sayaçı şişirmemeli");
+
+        c.save_progress(tid, 0, 3, 95.0, 100.0);
+        assert_eq!(c.watched_episode_count(tid), 2, "%90+ oynatma watched kaydı olmadan da sayılmalı");
+
+        c.remove_watched(tid, 0, 1);
+        assert_eq!(c.watched_episode_count(tid), 1, "izlenmedi işareti sayaçı düşürmeli");
+
+        c.remove_watched(tid, 0, 2);
+        c.remove_watched(tid, 0, 3);
+        let mut st = c.load_state();
+        st.progress.retain(|k, _| !k.starts_with(&format!("{tid}:")));
+        if st.current.as_ref().map(|w| w.title_id) == Some(tid) {
+            st.current = None;
+        }
+        c.save_state(&st);
+        assert_eq!(c.watched_episode_count(tid), 0, "temizlik sonrası sayaç sıfır olmalı");
+    }
+
+    #[test]
+    fn movie_progress_frac_reflects_playback() {
+        use_isolated_state();
+        let _g = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let c = Client::new();
+        let tid: u64 = 999_993;
+        let mut t = sample("movie", None, None);
+        t.id = tid;
+
+        assert_eq!(c.title_progress_frac(&t), 0.0, "oynatılmamış filmde oran sıfır olmalı");
+        c.save_progress(tid, 1, 1, 30.0, 100.0);
+        assert!((c.title_progress_frac(&t) - 0.3).abs() < 1e-9, "film oranı oynatma konumunu yansıtmalı");
+
+        let mut st = c.load_state();
+        st.progress.retain(|k, _| !k.starts_with(&format!("{tid}:")));
         c.save_state(&st);
     }
 
