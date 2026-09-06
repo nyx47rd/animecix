@@ -468,6 +468,23 @@ impl App {
         }
     }
 
+    pub fn refresh_internet_status(&self) {
+        // Ana sayfayı yeniden inşa eder; build_home_view yeniden kontrol eder
+        let stack = self.stack.clone();
+        let this = self.clone_ref();
+        glib::timeout_add_local_once(
+            std::time::Duration::from_millis(50),
+            move || {
+                let widget = this.build_home_view();
+                if let Some(prev) = stack.child_by_name("home") {
+                    stack.remove(&prev);
+                }
+                stack.add_named(&widget, Some("home"));
+                stack.set_visible_child_name("home");
+            },
+        );
+    }
+
     pub fn show_page(&self, page: &Page) {
         use gtk::prelude::IsA;
         self.progress_bars.borrow_mut().clear();
@@ -811,6 +828,26 @@ impl App {
 
     fn build_home_view(&self) -> gtk::ScrolledWindow {
         let scroll = gtk::ScrolledWindow::new();
+        scroll.set_hexpand(true);
+        scroll.set_vexpand(true);
+
+        let outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        scroll.set_child(Some(&outer));
+
+        // İnternet bağlantı uyarısı (offline ise)
+        match crate::api::check_internet() {
+            crate::api::InternetStatus::Online => {}
+            crate::api::InternetStatus::Offline { reason } => {
+                let banner = adw::Banner::new("İnternet bağlantısı yok");
+                banner.set_button_label(Some("Yeniden Kontrol Et"));
+                let this = self.clone_ref();
+                banner.connect_button_clicked(move |_| {
+                    this.refresh_internet_status();
+                });
+                outer.append(&banner);
+            }
+        }
+
         let cats = self.cats.borrow();
 
         if cats.is_empty() {
