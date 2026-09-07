@@ -2,7 +2,7 @@ use gtk::prelude::*;
 use adw::prelude::*;
 use std::rc::Rc;
 use std::cell::RefCell;
-use crate::api::{Client, HistoryEntry, Settings, Title};
+use crate::api::{Client, HistoryEntry, Settings, Title, marathon_summary};
 use crate::ui::episodes_view;
 
 pub(crate) fn show_info_dialog(parent: Option<&gtk::Window>, heading: &str, body: &str) {
@@ -49,8 +49,6 @@ impl MarathonView {
         }
 
         let total_count = marathon_items.len();
-        let completed_count = marathon_items.iter().filter(|m| m.completed).count();
-        let percent = if total_count > 0 { (completed_count * 100) / total_count } else { 0 };
 
         let summary_card = gtk::Box::new(gtk::Orientation::Vertical, 10);
         summary_card.add_css_class("marathon-summary-card");
@@ -73,14 +71,14 @@ impl MarathonView {
 
         let stats_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let stats_lbl = gtk::Label::new(Some(&format!(
-            "{} / {} Anime Tamamlandı", completed_count, total_count
+            "… / {} Anime Tamamlandı", total_count
         )));
         stats_lbl.add_css_class("title-4");
         stats_lbl.add_css_class("dim-label");
         stats_lbl.set_xalign(0.0);
         stats_lbl.set_hexpand(true);
 
-        let percent_pill = gtk::Label::new(Some(&format!("%{}", percent)));
+        let percent_pill = gtk::Label::new(Some("%…"));
         percent_pill.add_css_class("marathon-percent-pill");
 
         stats_row.append(&stats_lbl);
@@ -88,13 +86,30 @@ impl MarathonView {
 
         let pbar = gtk::ProgressBar::new();
         pbar.add_css_class("episode-progress");
-        pbar.set_fraction((completed_count as f64 / total_count as f64).clamp(0.0, 1.0));
+        pbar.set_fraction(0.0);
 
         summary_card.append(&top_row);
         summary_card.append(&stats_row);
         summary_card.append(&pbar);
 
         root.append(&summary_card);
+
+        let summary_titles: Vec<Title> = marathon_items.iter().map(|m| m.title.clone()).collect();
+        let client_s = client.clone();
+        let (stx, srx) = std::sync::mpsc::channel::<(usize, u32)>();
+        std::thread::spawn(move || {
+            let fracs: Vec<f64> = summary_titles.iter().map(|t| client_s.title_progress_frac(t)).collect();
+            let _ = stx.send(marathon_summary(&fracs));
+        });
+        glib::idle_add_local(move || match srx.try_recv() {
+            Ok((done, percent)) => {
+                stats_lbl.set_text(&format!("{} / {} Anime Tamamlandı", done, total_count));
+                percent_pill.set_text(&format!("%{}", percent));
+                pbar.set_fraction((percent as f64 / 100.0).clamp(0.0, 1.0));
+                glib::ControlFlow::Break
+            }
+            Err(_) => glib::ControlFlow::Continue,
+        });
 
         let list_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
 
@@ -158,7 +173,9 @@ impl MarathonView {
             chk.set_tooltip_text(Some(if item.completed { "Tamamlandı olarak işaretli" } else { "Tamamlandı olarak işaretle" }));
             let tid = item.title.id;
             let on_t_c = on_toggle_rc.clone();
-            chk.connect_toggled(move |_| { on_t_c(tid); });
+            let chk_guard = Rc::new(std::cell::Cell::new(false));
+            let chk_guard_c = chk_guard.clone();
+            chk.connect_toggled(move |_| { if chk_guard_c.get() { return; } on_t_c(tid); });
 
             let pic = gtk::Picture::new();
             pic.set_width_request(48);
@@ -198,8 +215,25 @@ impl MarathonView {
             let t_c = item.title.clone();
             let (tx, rx) = std::sync::mpsc::channel::<f64>();
             std::thread::spawn(move || { let _ = tx.send(client_c.title_progress_frac(&t_c)); });
+            let chk_u = chk.clone();
+            let badge_u = status_badge.clone();
+            let name_u = name_lbl.clone();
+            let guard_u = chk_guard.clone();
             glib::idle_add_local(move || match rx.try_recv() {
-                Ok(frac) => { prog.set_fraction(frac); glib::ControlFlow::Break }
+                Ok(frac) => {
+                    prog.set_fraction(frac);
+                    let done = frac >= 0.999;
+                    guard_u.set(true);
+                    chk_u.set_active(done);
+                    guard_u.set(false);
+                    chk_u.set_tooltip_text(Some(if done { "Tamamlandı olarak işaretli" } else { "Tamamlandı olarak işaretle" }));
+                    badge_u.set_text(if done { "🏁 Tamamlandı" } else { "⏳ Devam Ediyor" });
+                    badge_u.remove_css_class("status-badge-completed");
+                    badge_u.remove_css_class("status-badge-progress");
+                    badge_u.add_css_class(if done { "status-badge-completed" } else { "status-badge-progress" });
+                    if done { name_u.add_css_class("dim-label"); } else { name_u.remove_css_class("dim-label"); }
+                    glib::ControlFlow::Break
+                }
                 Err(_)   => glib::ControlFlow::Continue,
             });
 

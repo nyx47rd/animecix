@@ -331,6 +331,20 @@ fn default_true() -> bool { true }
 fn default_upscale() -> String { "hafif".into() }
 fn default_patience() -> u64 { 20 }
 
+/// Maraton özet kartı için (tamamlanan_sayısı, yüzde) hesaplar.
+/// Girdi: her yapımın 0.0-1.0 arası ilerleme oranı.
+/// %100'e ulaşan (0.999+) yapım tamamlanmış sayılır, yüzde ortalamadır.
+pub fn marathon_summary(fracs: &[f64]) -> (usize, u32) {
+    let total = fracs.len();
+    let done = fracs.iter().filter(|f| **f >= 0.999).count();
+    let percent = if total > 0 {
+        ((fracs.iter().sum::<f64>() / total as f64) * 100.0).round() as u32
+    } else {
+        0
+    };
+    (done, percent.min(100))
+}
+
 /// Upscale için mpv argümanlarını üretir.
 ///
 /// `video_height` biliniyorsa (mpv açılmadan önceki metadata) akıllı skip uygular:
@@ -2059,6 +2073,46 @@ impl Client {
         new_state
     }
 
+    pub fn set_marathon_completed(&self, id: u64, done: bool) {
+        let mut st = self.load_state();
+        if let Some(item) = st.marathon.iter_mut().find(|m| m.title.id == id) {
+            item.completed = done;
+        }
+        self.save_state(&st);
+    }
+
+    pub fn apply_watched_list(&self, tid: u64, eps: &[Episode]) {
+        let mut st = self.load_state();
+        let list = st.watched.entry(tid.to_string()).or_default();
+        for e in eps {
+            if !list.iter().any(|x| x.episode == e.episode && x.season == e.season) {
+                list.push(Watched { title_id: tid, episode: e.episode, season: e.season });
+            }
+        }
+        list.sort_by_key(|x| x.season * 10000 + x.episode);
+        self.save_state(&st);
+    }
+
+    pub fn mark_title_watched(&self, t: &Title) -> Result<usize, String> {
+        let eps = self.episodes(t)?;
+        if eps.is_empty() {
+            return Err("bölüm listesi alınamadı".into());
+        }
+        self.apply_watched_list(t.id, &eps);
+        if t.title_type.as_deref() == Some("movie") {
+            self.save_progress(t.id, 1, 1, 1.0, 1.0);
+        }
+        Ok(eps.len())
+    }
+
+    pub fn mark_title_unwatched(&self, tid: u64) {
+        let mut st = self.load_state();
+        st.watched.remove(&tid.to_string());
+        let prefix = format!("{tid}:");
+        st.progress.retain(|k, _| !k.starts_with(&prefix));
+        self.save_state(&st);
+    }
+
     pub fn remove_from_marathon(&self, id: u64) {
         let mut st = self.load_state();
         st.marathon.retain(|m| m.title.id != id);
@@ -2704,6 +2758,63 @@ mod tests {
         let mut st = c.load_state();
         st.progress.retain(|k, _| !k.starts_with(&format!("{tid}:")));
         c.save_state(&st);
+    }
+
+    #[test]
+    fn marathon_summary_math() {
+        assert_eq!(super::marathon_summary(&[]), (0, 0), "boş maratonda sıfır");
+        assert_eq!(super::marathon_summary(&[1.0, 0.5, 0.0]), (1, 50), "ortalama ve %100 sayımı");
+        assert_eq!(super::marathon_summary(&[1.0, 1.0]), (2, 100), "hepsi bitmişse %100");
+        assert_eq!(super::marathon_summary(&[0.2]), (0, 20), "tek yapımda yuvarlama");
+    }
+
+    #[test]
+    fn mark_title_unwatched_clears_all_traces() {
+        use_isolated_state();
+        let _g = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let c = Client::new();
+        let tid: u64 = 999_990;
+        let other: u64 = 999_989;
+
+        let eps = vec![
+            Episode { episode: 1, season: 1, name: "B1".into() },
+            Episode { episode: 2, season: 1, name: "B2".into() },
+        ];
+        c.apply_watched_list(tid, &eps);
+        c.save_progress(tid, 1, 1, 95.0, 100.0);
+        c.save_watched(&Watched { title_id: other, episode: 1, season: 1 }, "");
+        c.save_progress(other, 1, 1, 50.0, 100.0);
+        assert_eq!(c.watched_episode_count(tid), 2);
+
+        c.mark_title_unwatched(tid);
+        assert_eq!(c.watched_episode_count(tid), 0, "işaretler ve konumlar silinmeli");
+        assert!(!c.is_watched(tid, 1, 1), "watched kaydı kalmamalı");
+        assert!(c.get_progress(tid, 1, 1).is_none(), "progress kaydı kalmamalı");
+        assert!(c.is_watched(other, 1, 1), "komşu yapım etkilenmemeli");
+        assert!(c.get_progress(other, 1, 1).is_some(), "komşu konum etkilenmemeli");
+
+        c.mark_title_unwatched(other);
+    }
+
+    #[test]
+    fn apply_watched_list_fills_progress_count() {
+        use_isolated_state();
+        let _g = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let c = Client::new();
+        let tid: u64 = 999_988;
+
+        let eps = vec![
+            Episode { episode: 1, season: 1, name: "B1".into() },
+            Episode { episode: 2, season: 1, name: "B2".into() },
+            Episode { episode: 3, season: 1, name: "B3".into() },
+        ];
+        c.apply_watched_list(tid, &eps);
+        assert_eq!(c.watched_episode_count(tid), 3, "tümü işaretlenince sayaç dolmalı");
+        c.apply_watched_list(tid, &eps);
+        assert_eq!(c.watched_episode_count(tid), 3, "tekrar işaretleme çift saymamalı");
+
+        c.mark_title_unwatched(tid);
+        assert_eq!(c.watched_episode_count(tid), 0);
     }
 
     #[test]

@@ -503,9 +503,15 @@ pub fn check_and_auto_update_installation() {
     }
 }
 
+pub const STABLE_APPIMAGE_NAME: &str = "AnimeciX-x86_64.AppImage";
+
+pub fn stable_appimage_path(home: &str) -> String {
+    format!("{home}/.local/bin/{STABLE_APPIMAGE_NAME}")
+}
+
 pub fn desktop_exec_target(home: &str) -> String {
-    if let Some(ai) = std::env::var("APPIMAGE").ok().filter(|s| !s.trim().is_empty()) {
-        ai
+    if std::env::var("APPIMAGE").ok().filter(|s| !s.trim().is_empty()).is_some() {
+        stable_appimage_path(home)
     } else {
         format!("{home}/.local/bin/animecix")
     }
@@ -530,8 +536,19 @@ pub fn install_desktop_entry() -> Result<(), String> {
     let home = std::env::var("HOME").map_err(|_| "HOME klasörü bulunamadı".to_string())?;
 
     let exec_target = desktop_exec_target(&home);
-    if std::env::var("APPIMAGE").map(|s| !s.trim().is_empty()).unwrap_or(false) {
+    if let Some(ai) = std::env::var("APPIMAGE").ok().filter(|s| !s.trim().is_empty()) {
         let _ = std::fs::remove_file(format!("{home}/.local/bin/animecix"));
+        let stable = stable_appimage_path(&home);
+        if ai != stable {
+            std::fs::create_dir_all(format!("{home}/.local/bin")).map_err(|e| e.to_string())?;
+            std::fs::copy(&ai, &stable)
+                .map_err(|e| format!("AppImage sabit konuma kopyalanamadı: {e}"))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&stable, std::fs::Permissions::from_mode(0o755));
+            }
+        }
     } else {
         let bin_dir = format!("{home}/.local/bin");
         let _ = std::fs::create_dir_all(&bin_dir);
@@ -617,6 +634,7 @@ pub fn uninstall_application() {
 
     let bin_path = format!("{home}/.local/bin/animecix");
     let _ = std::fs::remove_file(&bin_path);
+    let _ = std::fs::remove_file(stable_appimage_path(&home));
 
     let d1 = format!("{home}/.local/share/applications/tr.com.animecix.desktop");
     let d2 = format!("{home}/.local/share/applications/animecix.desktop");
@@ -683,13 +701,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn desktop_exec_target_uses_appimage() {
+    fn desktop_exec_target_uses_stable_copy_for_appimage() {
         std::env::set_var("APPIMAGE", "/opt/AnimeciX-x86_64.AppImage");
         assert_eq!(
             desktop_exec_target("/home/x"),
-            "/opt/AnimeciX-x86_64.AppImage"
+            "/home/x/.local/bin/AnimeciX-x86_64.AppImage"
         );
         std::env::remove_var("APPIMAGE");
+    }
+
+    #[test]
+    fn stable_appimage_path_shape() {
+        assert_eq!(
+            stable_appimage_path("/home/x"),
+            "/home/x/.local/bin/AnimeciX-x86_64.AppImage"
+        );
     }
 
     #[test]

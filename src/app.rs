@@ -685,7 +685,7 @@ impl App {
 
         let desktop_group = adw::PreferencesGroup::new();
         desktop_group.set_title("2. Masaüstü Uygulama Menüsü Entegrasyonu");
-        desktop_group.set_description(Some("AnimeciX'i işletim sisteminizin uygulama başlatıcı menüsüne ekleyin:"));
+        desktop_group.set_description(Some("AnimeciX'i işletim sisteminizin uygulama başlatıcı menüsüne ekleyin (AppImage ~/.local/bin konumuna kopyalanır):"));
 
         let desktop_row = adw::ActionRow::new();
         desktop_row.set_title("Masaüstü Menü Başlatıcısı (tr.com.animecix.desktop)");
@@ -914,16 +914,44 @@ impl App {
                 this_click.open_episodes(title);
             },
             move |id| {
-                let is_done = this_toggle.client.toggle_marathon_completed(id);
-                let toast_msg = if is_done {
-                    "🏁 Maraton hedefi tamamlandı!"
-                } else {
-                    "⏳ Maraton hedefi devam ediyor"
-                };
-                let toast = adw::Toast::new(toast_msg);
-                toast.set_timeout(2);
-                this_toggle.toast.add_toast(toast);
-                this_toggle.show_page(&Page::Marathon);
+                let item = this_toggle.client.get_marathon().into_iter().find(|m| m.title.id == id);
+                let Some(item) = item else { return; };
+                if item.completed {
+                    this_toggle.client.mark_title_unwatched(id);
+                    this_toggle.client.set_marathon_completed(id, false);
+                    let toast = adw::Toast::new("⏳ Tüm bölümler izlenmedi olarak işaretlendi");
+                    toast.set_timeout(2);
+                    this_toggle.toast.add_toast(toast);
+                    this_toggle.show_page(&Page::Marathon);
+                    return;
+                }
+                let title = item.title.clone();
+                let client = this_toggle.client.clone();
+                let (tx, rx) = std::sync::mpsc::channel::<Result<usize, String>>();
+                std::thread::spawn(move || {
+                    let _ = tx.send(client.mark_title_watched(&title));
+                });
+                let this_async = this_toggle.clone();
+                glib::idle_add_local(move || match rx.try_recv() {
+                    Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                    msg => {
+                        match msg {
+                            Ok(Ok(n)) => {
+                                this_async.client.set_marathon_completed(id, true);
+                                let toast = adw::Toast::new(&format!("🏁 {n} bölüm izlendi olarak işaretlendi!"));
+                                toast.set_timeout(2);
+                                this_async.toast.add_toast(toast);
+                            }
+                            _ => {
+                                let toast = adw::Toast::new("❌ Bölüm listesi alınamadı (internete bağlı mısın?)");
+                                toast.set_timeout(3);
+                                this_async.toast.add_toast(toast);
+                            }
+                        }
+                        this_async.show_page(&Page::Marathon);
+                        glib::ControlFlow::Break
+                    }
+                });
             },
             move |id| {
                 this_remove.client.remove_from_marathon(id);
