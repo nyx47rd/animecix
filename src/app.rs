@@ -298,6 +298,7 @@ impl App {
         }
 
         app_inst.chain_signals();
+        app_inst.apply_ui_scale();
         app_inst.show_page(&initial_page);
         if welcome_seen {
             app_inst.fetch_home();
@@ -483,6 +484,17 @@ impl App {
                 stack.set_visible_child_name("home");
             },
         );
+    }
+
+    fn apply_ui_scale(&self) {
+        let s = self.settings.borrow().ui_scale;
+        self.window.remove_css_class("ui-scale-125");
+        self.window.remove_css_class("ui-scale-150");
+        if (s - 1.25).abs() < 0.01 {
+            self.window.add_css_class("ui-scale-125");
+        } else if s >= 1.4 {
+            self.window.add_css_class("ui-scale-150");
+        }
     }
 
     fn apply_movie_tint(&self, target: &gtk::Box, poster: Option<&str>) {
@@ -1232,6 +1244,7 @@ impl App {
             move |new_s| {
                 *this_save.settings.borrow_mut() = new_s.clone();
                 this_save.client.save_settings(&new_s);
+                this_save.apply_ui_scale();
                 let now = std::time::Instant::now();
                 let elapsed = now.duration_since(*last_save_c.borrow()).as_millis();
                 *last_save_c.borrow_mut() = now;

@@ -232,6 +232,10 @@ fn main() {
                     animation-iteration-count: infinite;
                 }
 
+                /* === Arayüz Ölçeği (Ayarlar > Görünüm) === */
+                .ui-scale-125 { font-size: 20px; }
+                .ui-scale-150 { font-size: 24px; }
+
                 /* === Dikey Film Sayfası === */
                 .movie-big {
                     border-radius: 18px;

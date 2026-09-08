@@ -322,6 +322,8 @@ pub struct Settings {
     pub default_fansub_template: Option<i64>,
     #[serde(default = "default_true")]
     pub fansub_ask_each_time: bool,
+    #[serde(default = "default_ui_scale")]
+    pub ui_scale: f32,
 }
 fn default_loading() -> String { "overlay".into() }
 fn default_quick_search() -> bool { true }
@@ -330,6 +332,7 @@ fn default_search_shortcut() -> String { "Ctrl+S".into() }
 fn default_true() -> bool { true }
 fn default_upscale() -> String { "hafif".into() }
 fn default_patience() -> u64 { 20 }
+fn default_ui_scale() -> f32 { 1.0 }
 
 /// Maraton özet kartı için (tamamlanan_sayısı, yüzde) hesaplar.
 /// Girdi: her yapımın 0.0-1.0 arası ilerleme oranı.
@@ -417,6 +420,7 @@ impl Default for Settings {
             source_patience_secs: default_patience(),
             default_fansub_template: None,
             fansub_ask_each_time: true,
+            ui_scale: default_ui_scale(),
         }
     }
 }
@@ -2842,6 +2846,14 @@ mod tests {
     fn cover_palette_missing_file_is_none() {
         let c = Client::new();
         assert!(c.cover_palette("https://image.tmdb.org/t/p/w185/olmayan.jpg").is_none());
+    }
+
+    #[test]
+    fn settings_ui_scale_defaults_to_100() {
+        let s = Settings::default();
+        assert!((s.ui_scale - 1.0).abs() < f32::EPSILON);
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert!((old.ui_scale - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]

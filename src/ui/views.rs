@@ -488,6 +488,26 @@ impl SettingsView {
         search_group.add(&search_sc_row);
         root.append(&search_group);
 
+        let view_group = adw::PreferencesGroup::new();
+        view_group.set_title("Görünüm");
+
+        let scale_row = adw::ComboRow::new();
+        scale_row.set_title("Arayüz Ölçeği");
+        scale_row.set_subtitle("Büyük monitörlerde arayüzü büyütür, anında uygulanır");
+        let scales = &["%100 (Normal)", "%125", "%150"];
+        let scale_model = gtk::StringList::new(scales);
+        scale_row.set_model(Some(&scale_model));
+        let current_scale = if (settings.ui_scale - 1.25).abs() < 0.01 {
+            1
+        } else if settings.ui_scale >= 1.4 {
+            2
+        } else {
+            0
+        };
+        scale_row.set_selected(current_scale);
+        view_group.add(&scale_row);
+        root.append(&view_group);
+
         let player_group = adw::PreferencesGroup::new();
         player_group.set_title("Oynatıcı Ayarları");
 
@@ -762,6 +782,7 @@ API istekleri de tünel üzerinden gider (ISS engellerini tamamen aşar).\n\
             let st_r = search_toggle_row.clone();
             let sc_r = shortcut_row.clone();
             let ssc_r = search_sc_row.clone();
+            let scale_r = scale_row.clone();
             let fs_r = fs_row.clone();
             let ani_r = aniskip_row.clone();
             let au_r = auto_update_row.clone();
@@ -786,6 +807,11 @@ API istekleri de tünel üzerinden gider (ISS engellerini tamamen aşar).\n\
                     2 => "F2".into(),
                     3 => "/".into(),
                     _ => "Ctrl+S".into(),
+                };
+                updated.ui_scale = match scale_r.selected() {
+                    1 => 1.25,
+                    2 => 1.5,
+                    _ => 1.0,
                 };
                 updated.auto_fullscreen = fs_r.is_active();
                 updated.aniskip_enabled = ani_r.is_active();
@@ -814,6 +840,8 @@ API istekleri de tünel üzerinden gider (ISS engellerini tamamen aşar).\n\
         shortcut_row.connect_selected_notify(move |_| sa2());
         let sa3 = save_all.clone();
         search_sc_row.connect_selected_notify(move |_| sa3());
+        let sa_scale = save_all.clone();
+        scale_row.connect_selected_notify(move |_| sa_scale());
         let sa4 = save_all.clone();
         fs_row.connect_active_notify(move |_| sa4());
         let sa5 = save_all.clone();
