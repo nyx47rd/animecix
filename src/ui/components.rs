@@ -12,6 +12,8 @@ pub fn bookmark_button(client: &Client, t: &Title) -> gtk::Button {
     b.add_css_class("circular");
     b.add_css_class("lg-icon");
     b.add_css_class("bookmark-btn");
+    // Satır yüksekliğine göre dikey esneyip ovalleşmesin: hep yuvarlak kalsın.
+    b.set_valign(gtk::Align::Center);
     b.set_tooltip_text(Some(if saved { "Favorilerden Çıkar" } else { "Favorilere Ekle" }));
     b
 }
@@ -26,6 +28,9 @@ pub fn marathon_button(client: &Client, t: &Title) -> gtk::Button {
     b.add_css_class("flat");
     b.add_css_class("circular");
     b.add_css_class("lg-icon");
+    b.add_css_class("bookmark-btn");
+    // Satır yüksekliğine göre dikey esneyip ovalleşmesin: hep yuvarlak kalsın.
+    b.set_valign(gtk::Align::Center);
     b.set_tooltip_text(Some(if in_marathon { "Maratondan Çıkar" } else { "İzleme Maratonuna Ekle" }));
     b
 }

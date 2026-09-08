@@ -115,40 +115,49 @@ fn main() {
                     transition: transform 150ms ease, box-shadow 150ms ease;
                 }
 
+                /* === Kart Hover: parlama + hafif büyüme === */
+                .title-btn:hover {
+                    cursor: pointer;
+                }
+                .title-btn:hover .cover {
+                    transform: scale(1.04);
+                    box-shadow: 0 0 22px 3px alpha(@accent_color, 0.55);
+                }
+
                 .cover-thumb {
-                    min-width: 48px !important;
-                    max-width: 48px !important;
-                    width: 48px !important;
-                    min-height: 72px !important;
-                    max-height: 72px !important;
-                    height: 72px !important;
+                    min-width: 48px;
+                    max-width: 48px;
+                    width: 48px;
+                    min-height: 72px;
+                    max-height: 72px;
+                    height: 72px;
                 }
 
                 .cover-header {
-                    min-width: 120px !important;
-                    max-width: 120px !important;
-                    width: 120px !important;
-                    min-height: 180px !important;
-                    max-height: 180px !important;
-                    height: 180px !important;
+                    min-width: 120px;
+                    max-width: 120px;
+                    width: 120px;
+                    min-height: 180px;
+                    max-height: 180px;
+                    height: 180px;
                 }
 
                 .cover-movie-header {
-                    min-width: 160px !important;
-                    max-width: 160px !important;
-                    width: 160px !important;
-                    min-height: 240px !important;
-                    max-height: 240px !important;
-                    height: 240px !important;
+                    min-width: 160px;
+                    max-width: 160px;
+                    width: 160px;
+                    min-height: 240px;
+                    max-height: 240px;
+                    height: 240px;
                 }
 
                 .cover-shelf {
-                    min-width: 140px !important;
-                    max-width: 140px !important;
-                    width: 140px !important;
-                    min-height: 210px !important;
-                    max-height: 210px !important;
-                    height: 210px !important;
+                    min-width: 140px;
+                    max-width: 140px;
+                    width: 140px;
+                    min-height: 210px;
+                    max-height: 210px;
+                    height: 210px;
                 }
 
                 /* === Kart Hover Animasyonu === */
@@ -204,15 +213,34 @@ fn main() {
                     margin-top: 2px;
                 }
 
-                /* === Raf Başlıkları === */
+                /* === Raf Başlıkları: büyük + nefes alan parlaklık === */
+                @keyframes shelf-breathe {
+                    0%, 100% { opacity: 0.72; }
+                    50% { opacity: 1.0; }
+                }
                 .shelf-title {
-                    font-size: 0.78em;
-                    font-weight: 700;
-                    letter-spacing: 0.06em;
+                    font-size: 1.02em;
+                    font-weight: 800;
+                    letter-spacing: 0.1em;
                     text-transform: uppercase;
                     color: @accent_color;
-                    opacity: 0.85;
+                    opacity: 0.9;
+                    text-shadow: 0 0 14px alpha(@accent_color, 0.35);
+                    animation-name: shelf-breathe;
+                    animation-duration: 3.2s;
+                    animation-timing-function: ease-in-out;
+                    animation-iteration-count: infinite;
                 }
+
+                /* === Dikey Film Sayfası === */
+                .movie-big {
+                    border-radius: 18px;
+                }
+                .movie-tint {
+                    border-radius: 18px;
+                    transition: background 1s ease;
+                }
+                .movie-play-btn { font-size: 1.1em; padding: 12px 36px; font-weight: 700; }
 
                 /* === HeaderBar Navigasyon Butonları === */
                 .header-nav-btn {

@@ -84,8 +84,7 @@ pub fn create_title_detail_header(
             desc_lbl.set_xalign(0.0);
             desc_lbl.set_wrap(true);
             desc_lbl.set_max_width_chars(60);
-            desc_lbl.set_lines(3);
-            desc_lbl.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            // Tam metin: satır sınırı ve "..." yok.
             info_box.append(&desc_lbl);
         }
     }
@@ -169,45 +168,49 @@ pub fn create_movie_detail_view(
     progress: Option<(f64, f64)>,
     on_play: impl Fn() + 'static,
 ) -> (gtk::Box, gtk::ProgressBar, gtk::Label) {
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 16);
-    root.set_margin_top(16);
-    root.set_margin_bottom(24);
-    root.set_margin_start(16);
-    root.set_margin_end(16);
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 14);
+    root.add_css_class("movie-big");
+    root.set_margin_top(44);
+    root.set_margin_bottom(40);
+    root.set_margin_start(28);
+    root.set_margin_end(28);
+    // Sabit genişlikte ortalı sütun: içerik her filmde aynı hizada dursun.
+    root.set_size_request(760, -1);
+    root.set_halign(gtk::Align::Center);
+    root.set_vexpand(true);
+    root.set_valign(gtk::Align::Center);
 
-    let card = gtk::Box::new(gtk::Orientation::Horizontal, 20);
-    card.add_css_class("card");
-    card.add_css_class("title-detail-card");
-    card.append(poster_widget);
+    poster_widget.set_halign(gtk::Align::Center);
+    root.append(poster_widget);
 
-    let info_box = gtk::Box::new(gtk::Orientation::Vertical, 10);
-    info_box.set_hexpand(true);
-    info_box.set_valign(gtk::Align::Center);
-
-    let name_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let name_lbl = gtk::Label::new(Some(&title.display_name()));
     name_lbl.add_css_class("title-1");
-    name_lbl.set_xalign(0.0);
+    name_lbl.set_xalign(0.5);
+    name_lbl.set_halign(gtk::Align::Center);
+    name_lbl.set_justify(gtk::Justification::Center);
     name_lbl.set_wrap(true);
-    name_lbl.set_hexpand(true);
-
-    name_row.append(&name_lbl);
-    name_row.append(bookmark_btn);
-    name_row.append(marathon_btn);
-    info_box.append(&name_row);
+    name_lbl.set_margin_start(24);
+    name_lbl.set_margin_end(24);
+    root.append(&name_lbl);
 
     if let Some(genre) = title.genre_line() {
         let genre_lbl = gtk::Label::new(Some(&genre));
         genre_lbl.add_css_class("dim-label");
         genre_lbl.add_css_class("title-4");
-        genre_lbl.set_xalign(0.0);
+        genre_lbl.set_xalign(0.5);
+        genre_lbl.set_halign(gtk::Align::Center);
+        genre_lbl.set_justify(gtk::Justification::Center);
         genre_lbl.set_wrap(true);
-        info_box.append(&genre_lbl);
+        genre_lbl.set_margin_start(24);
+        genre_lbl.set_margin_end(24);
+        root.append(&genre_lbl);
     }
 
     let facts = title.detail_facts();
     if !facts.is_empty() {
-        info_box.append(&create_fact_badges(&facts));
+        let badges = create_fact_badges(&facts);
+        badges.set_halign(gtk::Align::Center);
+        root.append(&badges);
     }
 
     if let Some(desc) = &title.description {
@@ -215,14 +218,33 @@ pub fn create_movie_detail_view(
         if !clean_desc.is_empty() {
             let desc_lbl = gtk::Label::new(Some(clean_desc));
             desc_lbl.add_css_class("dim-label");
-            desc_lbl.set_xalign(0.0);
+            desc_lbl.set_xalign(0.5);
+            desc_lbl.set_halign(gtk::Align::Center);
+            desc_lbl.set_justify(gtk::Justification::Center);
             desc_lbl.set_wrap(true);
-            desc_lbl.set_max_width_chars(60);
-            desc_lbl.set_lines(5);
-            desc_lbl.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            info_box.append(&desc_lbl);
+            desc_lbl.set_max_width_chars(80);
+            // Metin kutu kenarlarına değmesin.
+            desc_lbl.set_margin_start(44);
+            desc_lbl.set_margin_end(44);
+            // Tam metin: satır sınırı ve "..." yok.
+            root.append(&desc_lbl);
         }
     }
+
+    let btn_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    btn_row.set_halign(gtk::Align::Center);
+    btn_row.set_valign(gtk::Align::Center);
+    btn_row.append(bookmark_btn);
+    let play_btn = gtk::Button::with_label("Filmi İzle 🎬");
+    play_btn.add_css_class("suggested-action");
+    play_btn.add_css_class("pill");
+    play_btn.add_css_class("movie-play-btn");
+    play_btn.connect_clicked(move |_| {
+        on_play();
+    });
+    btn_row.append(&play_btn);
+    btn_row.append(marathon_btn);
+    root.append(&btn_row);
 
     let fmt_t = |s: f64| -> String {
         let s = s as u64;
@@ -233,12 +255,16 @@ pub fn create_movie_detail_view(
         else { format!("{m}:{:02}", sec) }
     };
 
+    let prog_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    prog_box.set_halign(gtk::Align::Center);
+    prog_box.set_size_request(520, -1);
     let pb = gtk::ProgressBar::new();
     pb.add_css_class("episode-progress");
-    pb.set_margin_top(6);
+    pb.set_hexpand(true);
     let lbl = gtk::Label::new(None);
     lbl.add_css_class("dim-label");
-    lbl.set_xalign(0.0);
+    lbl.set_xalign(0.5);
+    lbl.set_halign(gtk::Align::Center);
 
     if let Some((pos, dur)) = progress {
         if dur > 0.0 {
@@ -254,21 +280,8 @@ pub fn create_movie_detail_view(
         lbl.set_visible(false);
     }
 
-    info_box.append(&pb);
-    info_box.append(&lbl);
-
-    let play_btn = gtk::Button::with_label("Filmi İzle 🎬");
-    play_btn.add_css_class("suggested-action");
-    play_btn.add_css_class("pill");
-    play_btn.add_css_class("title-3");
-    play_btn.set_halign(gtk::Align::Start);
-    play_btn.set_margin_top(8);
-    play_btn.connect_clicked(move |_| {
-        on_play();
-    });
-    info_box.append(&play_btn);
-
-    card.append(&info_box);
-    root.append(&card);
+    prog_box.append(&pb);
+    prog_box.append(&lbl);
+    root.append(&prog_box);
     (root, pb, lbl)
 }

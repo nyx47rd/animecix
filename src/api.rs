@@ -1664,6 +1664,84 @@ impl Client {
             .send();
     }
 
+    pub fn cover_palette(&self, url: &str) -> Option<[(u8, u8, u8); 3]> {
+        use gdk_pixbuf::prelude::PixbufLoaderExt;
+        use std::collections::HashMap;
+        // NOT: crate::covers'a dokunma; bu dosya src/bin/* tarafindan tek basina include ediliyor.
+        let thumb = url
+            .replace("image.tmdb.org/t/p/original", "image.tmdb.org/t/p/w185")
+            .replace("image.tmdb.org/t/p/w500", "image.tmdb.org/t/p/w185")
+            .replace("image.tmdb.org/t/p/w342", "image.tmdb.org/t/p/w185");
+        let bytes = self.get_bytes(&thumb).or_else(|| self.get_bytes(url))?;
+        let loader = gdk_pixbuf::PixbufLoader::new();
+        loader.write(&bytes).ok()?;
+        loader.close().ok()?;
+        let small = loader
+            .pixbuf()?
+            .scale_simple(24, 24, gdk_pixbuf::InterpType::Bilinear)?;
+        let px = small.pixel_bytes()?;
+        let data: &[u8] = px.as_ref();
+        let ch = small.n_channels().max(3) as usize;
+        let rs = small.rowstride().max(1) as usize;
+        let (w, h) = (small.width().max(1) as usize, small.height().max(1) as usize);
+        // 5 bit/kanal kuantalama ile histogram; saf siyah/beyaz (bant/yazı) hariç.
+        let mut hist: HashMap<u32, (u64, u64, u64, u64)> = HashMap::new();
+        for y in 0..h {
+            for x in 0..w {
+                let o = y * rs + x * ch;
+                if o + 2 >= data.len() {
+                    continue;
+                }
+                let (r, g, b) = (data[o], data[o + 1], data[o + 2]);
+                if (r < 14 && g < 14 && b < 14) || (r > 242 && g > 242 && b > 242) {
+                    continue;
+                }
+                let key = ((r as u32 >> 3) << 10) | ((g as u32 >> 3) << 5) | (b as u32 >> 3);
+                let e = hist.entry(key).or_insert((0, 0, 0, 0));
+                e.0 += 1;
+                e.1 += r as u64;
+                e.2 += g as u64;
+                e.3 += b as u64;
+            }
+        }
+        if hist.is_empty() {
+            return None;
+        }
+        let mut bins: Vec<(u64, u8, u8, u8)> = hist
+            .values()
+            .map(|&(n, r, g, b)| (n, (r / n) as u8, (g / n) as u8, (b / n) as u8))
+            .collect();
+        bins.sort_by(|a, b| b.0.cmp(&a.0));
+        // Birbirinden yeterince uzak 3 baskın renk seç.
+        let dist2 = |a: (u8, u8, u8), b: (u8, u8, u8)| {
+            let (dr, dg, db) = (
+                a.0 as i32 - b.0 as i32,
+                a.1 as i32 - b.1 as i32,
+                a.2 as i32 - b.2 as i32,
+            );
+            dr * dr + dg * dg + db * db
+        };
+        let mut picks: Vec<(u8, u8, u8)> = Vec::with_capacity(3);
+        for &(_, r, g, b) in &bins {
+            if picks.iter().all(|&p| dist2(p, (r, g, b)) >= 90 * 90) {
+                picks.push((r, g, b));
+            }
+            if picks.len() == 3 {
+                break;
+            }
+        }
+        // Yeterli çeşitlilik yoksa son rengin koyusuyla tamamla.
+        while picks.len() < 3 {
+            let (r, g, b) = *picks.last().unwrap_or(&(122, 162, 247));
+            picks.push((
+                (r as u16 * 45 / 100) as u8,
+                (g as u16 * 45 / 100) as u8,
+                (b as u16 * 45 / 100) as u8,
+            ));
+        }
+        Some([picks[0], picks[1], picks[2]])
+    }
+
 
     pub fn state_path() -> PathBuf {
         let mut p = if let Ok(d) = std::env::var("ANIMECIX_STATE_DIR") {
@@ -2758,6 +2836,12 @@ mod tests {
         let mut st = c.load_state();
         st.progress.retain(|k, _| !k.starts_with(&format!("{tid}:")));
         c.save_state(&st);
+    }
+
+    #[test]
+    fn cover_palette_missing_file_is_none() {
+        let c = Client::new();
+        assert!(c.cover_palette("https://image.tmdb.org/t/p/w185/olmayan.jpg").is_none());
     }
 
     #[test]

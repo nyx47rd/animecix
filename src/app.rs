@@ -485,6 +485,82 @@ impl App {
         );
     }
 
+    fn apply_movie_tint(&self, target: &gtk::Box, poster: Option<&str>) {
+        let Some(url) = poster.map(|s| s.to_string()) else { return };
+        let client = self.client.clone();
+        let (tx, rx) = std::sync::mpsc::channel::<Option<[(u8, u8, u8); 3]>>();
+        std::thread::spawn(move || {
+            let _ = tx.send(client.cover_palette(&url));
+        });
+        let weak = target.downgrade();
+        glib::idle_add_local(move || match rx.try_recv() {
+            Ok(pal) => {
+                let Some(root) = weak.upgrade() else { return glib::ControlFlow::Break };
+                let [c1, c2, c3] =
+                    pal.unwrap_or([(122, 162, 247), (55, 70, 110), (140, 110, 190)]);
+                let (r1, g1, b1) = c1;
+                let (r2, g2, b2) = c2;
+                let (r3, g3, b3) = c3;
+                let css_a = format!(
+                    "#movie-tint-root {{ background-color: rgba({r2},{g2},{b2},0.35); \
+                     background: radial-gradient(ellipse at 50% 0%, \
+                     rgba({r1},{g1},{b1},0.32), rgba(0,0,0,0) 70%), \
+                     linear-gradient(135deg, rgba({r1},{g1},{b1},0.30), \
+                     rgba({r2},{g2},{b2},0.20) 55%, rgba({r3},{g3},{b3},0.30)); }}"
+                );
+                let css_b = format!(
+                    "#movie-tint-root {{ background-color: rgba({r2},{g2},{b2},0.35); \
+                     background: radial-gradient(ellipse at 50% 100%, \
+                     rgba({r3},{g3},{b3},0.30), rgba(0,0,0,0) 70%), \
+                     linear-gradient(315deg, rgba({r3},{g3},{b3},0.30), \
+                     rgba({r1},{g1},{b1},0.20) 55%, rgba({r2},{g2},{b2},0.30)); }}"
+                );
+                let prov_a = gtk::CssProvider::new();
+                prov_a.load_from_string(&css_a);
+                let prov_b = gtk::CssProvider::new();
+                prov_b.load_from_string(&css_b);
+                root.set_widget_name("movie-tint-root");
+                let display = root.display();
+                gtk::style_context_add_provider_for_display(
+                    &display,
+                    &prov_a,
+                    gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+                );
+                let weak2 = root.downgrade();
+                let disp2 = display.clone();
+                let (pa_c, pb_c) = (prov_a.clone(), prov_b.clone());
+                let showing_a = Rc::new(Cell::new(true));
+                glib::timeout_add_local(std::time::Duration::from_secs(5), move || {
+                    if weak2.upgrade().is_none() {
+                        gtk::style_context_remove_provider_for_display(&disp2, &pa_c);
+                        gtk::style_context_remove_provider_for_display(&disp2, &pb_c);
+                        return glib::ControlFlow::Break;
+                    }
+                    if showing_a.get() {
+                        gtk::style_context_remove_provider_for_display(&display, &prov_a);
+                        gtk::style_context_add_provider_for_display(
+                            &display,
+                            &prov_b,
+                            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+                        );
+                    } else {
+                        gtk::style_context_remove_provider_for_display(&display, &prov_b);
+                        gtk::style_context_add_provider_for_display(
+                            &display,
+                            &prov_a,
+                            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+                        );
+                    }
+                    showing_a.set(!showing_a.get());
+                    glib::ControlFlow::Continue
+                });
+                glib::ControlFlow::Break
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(_) => glib::ControlFlow::Break,
+        });
+    }
+
     pub fn show_page(&self, page: &Page) {
         use gtk::prelude::IsA;
         self.progress_bars.borrow_mut().clear();
@@ -1227,7 +1303,7 @@ impl App {
             || (eps.len() <= 1 && eps.first().map(|e| e.name.contains("Filmi")).unwrap_or(false));
 
         if is_movie {
-            let header_poster = self.covers.cover_picture(title.poster.as_deref(), 160, 240);
+            let header_poster = self.covers.cover_picture(title.poster.as_deref(), 220, 330);
             let bookmark_btn = components::bookmark_button(&self.client, title);
             let this_bm = self.clone_ref();
             let t_clone = title.clone();
@@ -1270,6 +1346,8 @@ impl App {
             );
             let prog_key = format!("{}:1:1", title.id);
             self.progress_bars.borrow_mut().insert(prog_key, (movie_pb, movie_lbl));
+            movie_view.add_css_class("movie-tint");
+            self.apply_movie_tint(&movie_view, title.poster.as_deref());
             scroll.set_child(Some(&movie_view));
             return scroll;
         }

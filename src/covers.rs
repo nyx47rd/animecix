@@ -16,8 +16,8 @@ fn ensure_size_provider(w: i32, h: i32) {
     let css = gtk::CssProvider::new();
     css.load_from_string(&format!(
         ".cover-fixed-{w}-{h} {{ \
-            min-width:{w}px !important; max-width:{w}px !important; width:{w}px !important; \
-            min-height:{h}px !important; max-height:{h}px !important; height:{h}px !important; \
+            min-width:{w}px; max-width:{w}px; width:{w}px; \
+            min-height:{h}px; max-height:{h}px; height:{h}px; \
         }}"
     ));
 
@@ -89,12 +89,17 @@ impl CoverManager {
         pic
     }
 
+    pub fn thumb_url(url: &str, hd: bool) -> String {
+        let t = if hd { "w342" } else { "w185" };
+        url.replace("image.tmdb.org/t/p/original", &format!("image.tmdb.org/t/p/{t}"))
+            .replace("image.tmdb.org/t/p/w500", &format!("image.tmdb.org/t/p/{t}"))
+            .replace("image.tmdb.org/t/p/w342", &format!("image.tmdb.org/t/p/{t}"))
+            .replace("image.tmdb.org/t/p/w185", &format!("image.tmdb.org/t/p/{t}"))
+    }
+
     pub fn load_cover(&self, url: Option<&str>, pic: &gtk::Picture, w: i32, h: i32) {
         let Some(url) = url else { return };
-        let url = url
-            .replace("image.tmdb.org/t/p/original", "image.tmdb.org/t/p/w185")
-            .replace("image.tmdb.org/t/p/w500", "image.tmdb.org/t/p/w185")
-            .replace("image.tmdb.org/t/p/w342", "image.tmdb.org/t/p/w185");
+        let url = Self::thumb_url(&url, false);
         let key = format!("{url}@{w}x{h}");
 
         if let Some(Some(t)) = self.cache.borrow().get(&key) {
