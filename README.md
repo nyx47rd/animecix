@@ -20,7 +20,7 @@ kontrol eder ve kendini otomatik güncelleyebilir.
 
 - 🏠 **Ana Sayfa**: kategorilere göre anime/dizi/film listeleri
 - 🔎 **Arama**: ana ekranda kısayol tuşu ile hızlı arama; bölüm ekranında hızlı bölüm arama
-- ▶️ **Oynatıcı**: MPV ile oynatma, 2 dakikalık önbellek, otomatik tam ekran, **AniSkip** intro/outro atlama
+- ▶️ **Oynatıcı**: MPV ile oynatma, 2 dakikalık önbellek, otomatik tam ekran, resmi intro/outro atlama
 - ⭐ **Favoriler**: beğendiğin başlıkları koleksiyonuna ekle
 - 🏃 **Maraton**: izleme listesi — sürükle-bırak ile sıralama ve bölüm ilerleme takibi
 - 🕘 **Geçmiş**: izlediğin bölümlerin geçmişi
@@ -180,8 +180,9 @@ bash build_appimage.sh
 |---|---|
 | `/` | Bölüm ekranında hızlı bölüm arama |
 | `Ctrl+S` | Ana ekranda arama çubuğunu aç |
-| `s` | Oynatıcıda AniSkip ile intro sonuna atla |
-| `e` | Oynatıcıda AniSkip ile outro sonuna atla |
+| `s` | Oynatıcıda intro sonuna atla |
+| `e` | Oynatıcıda outro sonuna atla |
+| `Shift+M` (`M`) | Çalan şarkıyı tarayıcıda aç (şarkı bilgisi varsa) |
 | `Esc` | Geri / aramayı kapat |
 
 Kısayollar *Ayarlar* ekranından değiştirilebilir.
@@ -221,33 +222,16 @@ Uygulama, ağ gecikmesini azaltmak için aşağıdaki teknikleri kullanır:
 
 ---
 
-## AniSkip Entegrasyonu
+## Resmi İntro/Outro Verisi
 
-AnimeciX, intro ve outro'ları otomatik atlamak için topluluk tarafından işletilen
-**[aniskip-mirror](https://github.com/nyx47rd/aniskip-mirror)** API'sini kullanır.
-Orijinal `api.aniskip.com` servisi 2026'da kullanım dışı kalmıştır (alan adı
-süresi dolmuş, GitHub deposu kaldırılmış), bu yüzden aynı JSON şemasına birebir
-uyumlu kendi mirror altyapımız kullanılır.
-
-**Endpoint'ler** (otomatik failover):
-
-1. **Birincil**: `https://aniskip-mirror-cf.yasar-123-sevda.workers.dev` — Cloudflare Worker
-   (R2 depolama, edge cache, 75.000+ anime verisi)
-2. **Yedek**: `https://aniskip-mirror.vercel.app`
-
-Birincil endpoint 5xx veya timeout dönerse uygulama saydam biçimde yedek'e geçer.
-404 (bölüm verisi yok) her iki endpoint için geçerli yanıt sayılır ve 6 saat
-önbelleğe alınır; sürekli denenmez.
+AnimeciX, intro ve outro süreleri ile açılış/kapanış şarkı bilgilerini
+AnimeciX'in resmi video altyapısından alır (üçüncü parti servis kullanılmaz).
+Video açılmadan önce çözülür; sonuç 6 saat önbelleğe alınır.
 
 **Davranış**:
-- Bir bölüm başlatıldığında, MPV supervisor thread'i her 250 ms'de `time-pos` okur
-- Pencere AniSkip verisinde tanımlı OP/ED aralığına girdiğinde, MPV'ye `set_property time-pos` ile otomatik seek
-- Atlandığında MPV OSD'de 3 sn `⏩ İntro Atlandı (AniSkip: 0:28 → 1:58)` bildirimi + uygulama toast'ı
-- Ayarlardan kapatılabilir; kapatıldığında `s` / `e` tuşlarıyla manuel atlama hâlâ çalışır
-
-**Şema uyumluluğu**: API, orijinal `aniskip.com` v1 (snake_case) ve v2 (camelCase)
-yanıt yapılarını birebir döndürür. Mevcut istemciler hiçbir değişiklik olmadan
-çalışmaya devam eder.
+- `s` / `e` tuşları intro/outro sonuna atlar; atlayınca MPV OSD'de bildirim çıkar
+- Şarkı varsa bölüm boyunca sağ üstte görünür; `Shift+M` tuşu şarkıyı tarayıcıda açar
+- İntro/outro bildirimleri ve `Shift+M` ipucu Ayarlar'dan kapatılabilir (tuşlar çalışmaya devam eder)
 
 ---
 

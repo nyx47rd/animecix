@@ -488,6 +488,23 @@ impl SettingsView {
         search_group.add(&search_sc_row);
         root.append(&search_group);
 
+        let tools_group = adw::PreferencesGroup::new();
+        tools_group.set_title("Araçlar Menüsü Kısayolu");
+
+        let tools_sc_row = adw::ComboRow::new();
+        tools_sc_row.set_title("Kısayol Tuşu");
+        tools_sc_row.set_subtitle("Araçlar menüsünü açacak klavye kısayolu (çıplak T metin alanında çalışmaz)");
+        let tools_sc_model =
+            gtk::StringList::new(&crate::ui::tools_menu::TOOL_SHORTCUT_OPTIONS);
+        tools_sc_row.set_model(Some(&tools_sc_model));
+        let current_tools_sc = crate::ui::tools_menu::TOOL_SHORTCUT_OPTIONS
+            .iter()
+            .position(|&s| s == settings.tools_shortcut)
+            .unwrap_or(0);
+        tools_sc_row.set_selected(current_tools_sc as u32);
+        tools_group.add(&tools_sc_row);
+        root.append(&tools_group);
+
         let view_group = adw::PreferencesGroup::new();
         view_group.set_title("Görünüm");
 
@@ -506,6 +523,19 @@ impl SettingsView {
         };
         scale_row.set_selected(current_scale);
         view_group.add(&scale_row);
+
+        let theme_row = adw::ComboRow::new();
+        theme_row.set_title("Tema");
+        theme_row.set_subtitle("Koyu renklerde gradyan arka plan, anında uygulanır");
+        let theme_names: Vec<&str> = crate::theme::THEMES.iter().map(|(_, n)| *n).collect();
+        let theme_model = gtk::StringList::new(&theme_names);
+        theme_row.set_model(Some(&theme_model));
+        let current_theme = crate::theme::THEMES
+            .iter()
+            .position(|(id, _)| *id == settings.theme)
+            .unwrap_or(0) as u32;
+        theme_row.set_selected(current_theme);
+        view_group.add(&theme_row);
         root.append(&view_group);
 
         let player_group = adw::PreferencesGroup::new();
@@ -517,11 +547,23 @@ impl SettingsView {
         fs_row.set_active(settings.auto_fullscreen);
         player_group.add(&fs_row);
 
-        let aniskip_row = adw::SwitchRow::new();
-        aniskip_row.set_title("AniSkip Otomatik İntro Atlama Entegrasyonu");
-        aniskip_row.set_subtitle("AniSkip API üzerinden 's' kısayol tuşu ile intro bitişine otomatik atlar");
-        aniskip_row.set_active(settings.aniskip_enabled);
-        player_group.add(&aniskip_row);
+        let intro_hint_row = adw::SwitchRow::new();
+        intro_hint_row.set_title("İntro/Outro Bildirimleri");
+        intro_hint_row.set_subtitle("İntro ve outro başlayınca mpv'de bilgi gösterir ('s'/'e' tuşları hep çalışır)");
+        intro_hint_row.set_active(settings.show_intro_hint);
+        player_group.add(&intro_hint_row);
+
+        let music_hint_row = adw::SwitchRow::new();
+        music_hint_row.set_title("Şarkıda 'Shift+M' Tuşu İpucu");
+        music_hint_row.set_subtitle("Şarkı satırında şarkıyı tarayıcıda açan 'Shift+M' tuşunu hatırlatır");
+        music_hint_row.set_active(settings.show_music_hint);
+        player_group.add(&music_hint_row);
+
+        let play_q_row = adw::SwitchRow::new();
+        play_q_row.set_title("Oynatırken Kalite Sor");
+        play_q_row.set_subtitle("Bölüm açılırken kalite seçilsin (kapalıysa en iyi açılır)");
+        play_q_row.set_active(settings.play_ask_quality);
+        player_group.add(&play_q_row);
         root.append(&player_group);
 
         let perf_group = adw::PreferencesGroup::new();
@@ -782,9 +824,13 @@ API istekleri de tünel üzerinden gider (ISS engellerini tamamen aşar).\n\
             let st_r = search_toggle_row.clone();
             let sc_r = shortcut_row.clone();
             let ssc_r = search_sc_row.clone();
+            let tsc_r = tools_sc_row.clone();
             let scale_r = scale_row.clone();
+            let theme_r = theme_row.clone();
             let fs_r = fs_row.clone();
-            let ani_r = aniskip_row.clone();
+            let ih_r = intro_hint_row.clone();
+            let mh_r = music_hint_row.clone();
+            let pq_r = play_q_row.clone();
             let au_r = auto_update_row.clone();
             let notify_r = notify_row.clone();
             let up_r = upscale_row.clone();
@@ -808,13 +854,25 @@ API istekleri de tünel üzerinden gider (ISS engellerini tamamen aşar).\n\
                     3 => "/".into(),
                     _ => "Ctrl+S".into(),
                 };
+                updated.tools_shortcut = match tsc_r.selected() {
+                    1 => "Alt+T".into(),
+                    2 => "F10".into(),
+                    3 => "T".into(),
+                    _ => "Ctrl+T".into(),
+                };
                 updated.ui_scale = match scale_r.selected() {
                     1 => 1.25,
                     2 => 1.5,
                     _ => 1.0,
                 };
+                updated.theme = crate::theme::THEMES
+                    .get(theme_r.selected() as usize)
+                    .map(|(id, _)| id.to_string())
+                    .unwrap_or_else(|| crate::theme::DEFAULT_THEME.to_string());
                 updated.auto_fullscreen = fs_r.is_active();
-                updated.aniskip_enabled = ani_r.is_active();
+                updated.show_intro_hint = ih_r.is_active();
+                updated.show_music_hint = mh_r.is_active();
+                updated.play_ask_quality = pq_r.is_active();
                 updated.auto_update = au_r.is_active();
                 updated.notify_uptodate = notify_r.is_active();
                 updated.upscale = match up_r.selected() {
@@ -840,12 +898,20 @@ API istekleri de tünel üzerinden gider (ISS engellerini tamamen aşar).\n\
         shortcut_row.connect_selected_notify(move |_| sa2());
         let sa3 = save_all.clone();
         search_sc_row.connect_selected_notify(move |_| sa3());
+        let sa_tools = save_all.clone();
+        tools_sc_row.connect_selected_notify(move |_| sa_tools());
         let sa_scale = save_all.clone();
         scale_row.connect_selected_notify(move |_| sa_scale());
+        let sa_theme = save_all.clone();
+        theme_row.connect_selected_notify(move |_| sa_theme());
         let sa4 = save_all.clone();
         fs_row.connect_active_notify(move |_| sa4());
-        let sa5 = save_all.clone();
-        aniskip_row.connect_active_notify(move |_| sa5());
+        let sa5a = save_all.clone();
+        intro_hint_row.connect_active_notify(move |_| sa5a());
+        let sa5b = save_all.clone();
+        music_hint_row.connect_active_notify(move |_| sa5b());
+        let sa5c = save_all.clone();
+        play_q_row.connect_active_notify(move |_| sa5c());
         let sa6 = save_all.clone();
         auto_update_row.connect_active_notify(move |_| sa6());
         let sa7 = save_all.clone();
@@ -856,6 +922,49 @@ API istekleri de tünel üzerinden gider (ISS engellerini tamamen aşar).\n\
         light_row.connect_active_notify(move |_| sa9());
         let sa10 = save_all.clone();
         patience_spin.connect_value_changed(move |_| sa10());
+
+        let dl_group = adw::PreferencesGroup::new();
+        dl_group.set_title("İndirilenler");
+        let dl_dir_row = adw::ActionRow::new();
+        dl_dir_row.set_title("İndirme Klasörü");
+        let initial_dl = s_base.download_dir.clone().unwrap_or_else(|| {
+            crate::download::default_download_dir().to_string_lossy().into_owned()
+        });
+        dl_dir_row.set_subtitle(&initial_dl);
+        let dl_pick = gtk::Button::with_label("Değiştir");
+        dl_pick.add_css_class("flat");
+        dl_pick.add_css_class("pill");
+        dl_pick.set_valign(gtk::Align::Center);
+        dl_dir_row.add_suffix(&dl_pick);
+        dl_group.add(&dl_dir_row);
+        root.insert_child_after(&dl_group, Some(&player_group));
+        {
+            let s_o = s_base.clone();
+            let on_o = on_save.clone();
+            let row_o = dl_dir_row.clone();
+            dl_pick.connect_clicked(move |_| {
+                let s_base_c = s_o.clone();
+                let on_save_c = on_o.clone();
+                let row_c = row_o.clone();
+                let dialog = gtk::FileDialog::builder().title("İndirme Klasörü Seç").build();
+                dialog.select_folder(
+                    None::<&gtk::Window>,
+                    None::<&gio::Cancellable>,
+                    move |res| match res {
+                        Ok(f) => {
+                            if let Some(path) = f.path() {
+                                let dir = path.to_string_lossy().into_owned();
+                                let mut s = s_base_c.clone();
+                                s.download_dir = Some(dir.clone());
+                                row_c.set_subtitle(&dir);
+                                on_save_c(s);
+                            }
+                        }
+                        Err(e) => eprintln!("[DL] klasör seçilemedi: {e}"),
+                    },
+                );
+            });
+        }
 
         let data_group = adw::PreferencesGroup::new();
         data_group.set_title("Veri Yönetimi");
@@ -928,6 +1037,30 @@ API istekleri de tünel üzerinden gider (ISS engellerini tamamen aşar).\n\
             let _ = crate::install_desktop_entry();
         });
         info_group.add(&reinstall_btn);
+
+        let gh_row = adw::ActionRow::new();
+        gh_row.set_title("GitHub");
+        gh_row.set_subtitle("https://github.com/nyx47rd/animecix");
+        let gh_icon = crate::ui::brand_icons::github_image(16);
+        gh_row.add_prefix(&gh_icon);
+        let gh_btn = gtk::Button::with_label("Aç");
+        gh_btn.add_css_class("flat");
+        gh_btn.add_css_class("pill");
+        gh_btn.set_valign(gtk::Align::Center);
+        gh_btn.connect_clicked(|_| {
+            let url = "https://github.com/nyx47rd/animecix";
+            let ok = std::process::Command::new("xdg-open")
+                .arg(url)
+                .spawn()
+                .is_ok();
+            if !ok {
+                let _ = std::process::Command::new("gio")
+                    .args(["open", url])
+                    .spawn();
+            }
+        });
+        gh_row.add_suffix(&gh_btn);
+        info_group.add(&gh_row);
 
         root.append(&info_group);
 

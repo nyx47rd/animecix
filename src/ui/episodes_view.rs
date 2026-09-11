@@ -36,6 +36,7 @@ pub fn create_title_detail_header(
     poster_widget: &gtk::Picture,
     bookmark_btn: &gtk::Button,
     marathon_btn: &gtk::Button,
+    download_btn: &gtk::Button,
 ) -> gtk::Box {
     let card = gtk::Box::new(gtk::Orientation::Horizontal, 16);
     card.add_css_class("card");
@@ -60,6 +61,7 @@ pub fn create_title_detail_header(
     name_row.append(&name_lbl);
     name_row.append(bookmark_btn);
     name_row.append(marathon_btn);
+    name_row.append(download_btn);
     info_box.append(&name_row);
 
     if let Some(genre) = title.genre_line() {

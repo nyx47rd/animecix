@@ -1,8 +1,16 @@
 mod api;
 mod app;
+mod aria;
 mod covers;
+mod download;
+mod font;
 mod http;
+mod music;
+mod play_quality;
 mod player;
+mod segmented;
+mod skip;
+mod theme;
 mod ui;
 mod update;
 mod vpn;
@@ -127,37 +135,29 @@ fn main() {
                 .cover-thumb {
                     min-width: 48px;
                     max-width: 48px;
-                    width: 48px;
                     min-height: 72px;
                     max-height: 72px;
-                    height: 72px;
                 }
 
                 .cover-header {
                     min-width: 120px;
                     max-width: 120px;
-                    width: 120px;
                     min-height: 180px;
                     max-height: 180px;
-                    height: 180px;
                 }
 
                 .cover-movie-header {
                     min-width: 160px;
                     max-width: 160px;
-                    width: 160px;
                     min-height: 240px;
                     max-height: 240px;
-                    height: 240px;
                 }
 
                 .cover-shelf {
                     min-width: 140px;
                     max-width: 140px;
-                    width: 140px;
                     min-height: 210px;
                     max-height: 210px;
-                    height: 210px;
                 }
 
                 /* === Kart Hover Animasyonu === */
@@ -232,6 +232,12 @@ fn main() {
                     animation-iteration-count: infinite;
                 }
 
+                /* === Koyu temalarda sabit okunaklı raf başlığı (temaya sadık değil) === */
+                .theme-dark .shelf-title {
+                    color: #FFFFFF;
+                    text-shadow: 0 1px 4px alpha(black, 0.85);
+                }
+
                 /* === Arayüz Ölçeği (Ayarlar > Görünüm) === */
                 .ui-scale-125 { font-size: 20px; }
                 .ui-scale-150 { font-size: 24px; }
@@ -245,17 +251,6 @@ fn main() {
                     transition: background 1s ease;
                 }
                 .movie-play-btn { font-size: 1.1em; padding: 12px 36px; font-weight: 700; }
-
-                /* === HeaderBar Navigasyon Butonları === */
-                .header-nav-btn {
-                    border-radius: 20px;
-                    padding: 4px 10px;
-                    font-size: 0.88em;
-                    transition: background-color 120ms;
-                }
-                .header-nav-btn:hover {
-                    background-color: alpha(currentColor, 0.1);
-                }
 
                 /* === Bookmark Butonu (eski floating) === */
                 .lg-icon { -gtk-icon-size: 26px; }
@@ -278,32 +273,99 @@ fn main() {
                     transform: scale(1.15);
                 }
 
-                /* === ListBox İçerik Satırları === */
+                /* === Bölüm Listesi Paneli: oluklar panelde erir, siyah çerçeve biter === */
+                /* NOT: GtkListBox'un CSS düğümü `list`tir (`listbox` ölü kural olur). */
+                list.content-list {
+                    background-color: alpha(@row_tint, 0.04);
+                    border: none;
+                    box-shadow: none;
+                    border-radius: 14px;
+                    padding: 6px 8px;
+                }
+                list.content-list > separator {
+                    background-color: transparent;
+                    opacity: 0;
+                }
                 .content-list > row {
-                    border-radius: 6px;
-                    transition: background-color 120ms ease, transform 100ms ease;
+                    background-color: alpha(@row_tint, 0.10);
+                    border: none;
+                    outline: none;
+                    box-shadow: none;
+                    border-radius: 10px;
+                    margin: 3px 0;
+                    transition: background-color 120ms ease;
                 }
                 .content-list > row:hover {
-                    background-color: alpha(currentColor, 0.06);
+                    background-color: alpha(@row_tint, 0.17);
                 }
-                .content-list > row:selected {
-                    background-color: alpha(@accent_color, 0.15);
+                .content-list > row:focus-visible {
+                    background-color: alpha(@row_tint, 0.22);
+                    outline: none;
+                }
+                .content-list > row:selected,
+                .content-list > row:selected:focus {
+                    background-color: alpha(@row_tint, 0.28);
+                    outline: none;
+                    box-shadow: none;
+                }
+
+                /* === Şeffaf kaydırma: viewport dahil tema görünür === */
+                .clear-scroll,
+                .clear-scroll viewport,
+                .clear-scroll list:not(.content-list),
+                .clear-scroll list:not(.content-list) > row,
+                .clear-scroll flowbox {
+                    background-color: transparent;
+                    background-image: none;
+                    border: none;
+                    box-shadow: none;
+                }
+
+                /* === Yüzen indirme hapı: kapsül kabı, düğmeleri sarar === */
+                .dl-float-pill {
+                    background-color: alpha(@card_bg_color, 0.95);
+                    color: @card_fg_color;
+                    border: 1px solid alpha(currentColor, 0.12);
+                    border-radius: 9999px;
+                    padding: 6px;
+                    box-shadow: 0 4px 18px alpha(black, 0.45);
+                }
+                .dl-float-pill button.pill {
+                    margin: 0;
+                }
+
+                /* === Bölüm kaydırıcısı: kenar gölgesi şeridi + hap altı boşluk === */
+                scrolledwindow.clear-scroll undershoot.top,
+                scrolledwindow.clear-scroll undershoot.bottom,
+                scrolledwindow.clear-scroll overshoot.top,
+                scrolledwindow.clear-scroll overshoot.bottom {
+                    background: none;
+                    background-image: none;
+                    box-shadow: none;
+                    border: none;
+                }
+                scrolledwindow.clear-scroll scrollbar {
+                    background: transparent;
+                    border: none;
+                }
+                scrolledwindow.clear-scroll viewport {
+                    padding-bottom: 72px;
                 }
 
                 /* === İzleme Maratonu Zengin Tasarım Stilleri === */
-                listbox.marathon-list-box {
+                list.marathon-list-box {
                     background: transparent;
                 }
-                listbox.marathon-list-box > row {
+                list.marathon-list-box > row {
                     background: transparent;
                     border: none;
                     padding: 0;
                     margin: 0;
                     box-shadow: none;
                 }
-                listbox.marathon-list-box > row:hover,
-                listbox.marathon-list-box > row:selected,
-                listbox.marathon-list-box > row:focus {
+                list.marathon-list-box > row:hover,
+                list.marathon-list-box > row:selected,
+                list.marathon-list-box > row:focus {
                     background: transparent;
                 }
 
@@ -362,8 +424,11 @@ fn main() {
                 .marathon-index {
                     min-width: 26px;
                     min-height: 26px;
-                    padding: 0 4px;
+                    padding: 2px 8px;
                     color: @accent_color;
+                    background-color: alpha(@accent_color, 0.12);
+                    border: 1px solid alpha(@accent_color, 0.45);
+                    border-radius: 9px;
                     font-weight: 700;
                     font-size: 13px;
                 }
@@ -392,9 +457,9 @@ fn main() {
                 }
 
                 .status-badge-progress {
-                    background-color: alpha(@accent_color, 0.18);
+                    background-color: alpha(@accent_color, 0.22);
                     color: @accent_color;
-                    border: 1px solid alpha(@accent_color, 0.35);
+                    border: 1px solid alpha(@accent_color, 0.6);
                     border-radius: 12px;
                     padding: 2px 10px;
                     font-size: 0.82em;

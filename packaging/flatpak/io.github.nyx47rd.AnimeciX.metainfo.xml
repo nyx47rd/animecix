@@ -18,7 +18,7 @@
     <ul>
       <li>Türkçe arayüz ve Türkçe altyazılı içerik desteği</li>
       <li>Kaldığın yerden devam etme ve marathon (kesintisiz dizi maratonu) modu</li>
-      <li>AniSkip entegrasyonu: intro/outro otomatik atlama ('s' / 'e' tuşları)</li>
+      <li>Resmi intro/outro atlama ('s' / 'e' tuşları) + şarkı bilgisi ('M' tuşu)</li>
       <li>Anime4K görsel iyileştirme modları (hafif / normal / ultra)</li>
       <li>İsteğe bağlı VPN proxy yönetimi (sing-box) ile ISS kısıtlamalarını aşma</li>
       <li>Donanım ivmelendirme ve yavaş bağlantılar için akıllı önbellekleme</li>
@@ -47,6 +47,11 @@
     <binary>animecix</binary>
   </provides>
   <releases>
+    <release version="1.2.0" date="2026-09-11">
+      <description>
+        <p>Araçlar menüsü (animasyonlu popover, atanabilir kısayol), yüzen geri butonu, hap arama, modern karşılama ekranı, Ayarlar'da GitHub satırı; bölüm satırları tema boyası; intro/outro OSD çakışması düzeltildi.</p>
+      </description>
+    </release>
     <release version="2.9.2" date="2026-08-25">
       <description>
         <p>Yorum temizliği; vpn modülü harici komutlardan arındırıldı; AppImage dışı kurulumlarda güncelleme kontrolü atlanır.</p>

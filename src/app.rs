@@ -4,7 +4,6 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
-use gtk::gio;
 
 use crate::api::{self, Client, Episode, Title};
 use crate::covers::CoverManager;
@@ -12,7 +11,7 @@ use crate::covers::CoverManager;
 use crate::ui::components;
 use crate::ui::episodes_view;
 use crate::ui::views;
-use crate::{check_all_dependencies, check_desktop_entry_installed, install_desktop_entry};
+
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Page {
@@ -23,15 +22,24 @@ pub enum Page {
     History,
     Settings,
     Search,
+    Downloads,
     Episodes { title: Title, eps: Vec<Episode> },
     Movie { title: Title, eps: Vec<Episode> },
+}
+
+/// Çözüm paketi: oynatma adayları + video öncesi çözülmüş atlama planı.
+pub struct PlaySources {
+    pub candidates: Vec<String>,
+    pub fast_embeds: Vec<String>,
+    pub fallback_embeds: Vec<String>,
+    pub plan: Option<crate::skip::SkipPlan>,
 }
 
 pub enum Msg {
     Cats(Result<Vec<api::Category>, String>),
     Search(Result<Vec<Title>, String>),
     Eps(Title, Result<Vec<Episode>, String>),
-    Play(Title, Episode, Result<(Vec<String>, Vec<String>, Vec<String>), String>),
+    Play(Title, Episode, Result<PlaySources, String>),
     FansubsLoaded {
         title: Title,
         ep: Episode,
@@ -43,17 +51,28 @@ pub enum Msg {
         ep: Episode,
         chosen: Option<api::FansubInfo>,
     },
+    DlLists {
+        title: Title,
+        quality: String,
+        items: Vec<(Episode, Vec<api::FansubInfo>)>,
+        is_single: bool,
+    },
+    DlBatchResolved(Vec<crate::download::DownloadRecord>, Vec<String>, bool),
+    PlayQualities {
+        title: Title,
+        ep: Episode,
+        fs: api::FansubInfo,
+        rest: Vec<api::FansubInfo>,
+        quals: Result<Vec<crate::play_quality::PlayQuality>, String>,
+    },
 }
 
 pub struct App {
     pub window: adw::ApplicationWindow,
     pub stack: gtk::Stack,
-    pub back_btn: gtk::Button,
+    pub float_back: gtk::Button,
+    pub tools_menu: Rc<RefCell<Option<crate::ui::tools_menu::ToolsMenu>>>,
     pub search_toggle_btn: gtk::Button,
-    pub fav_btn: gtk::Button,
-    pub marathon_btn: gtk::Button,
-    pub hist_btn: gtk::Button,
-    pub settings_btn: gtk::Button,
     pub title_label: gtk::Label,
     pub search_bar: gtk::SearchBar,
     pub search_entry: gtk::SearchEntry,
@@ -67,15 +86,40 @@ pub struct App {
     pub settings: Rc<RefCell<api::Settings>>,
     pub progress: Rc<RefCell<HashMap<String, (f64, f64)>>>,
     pub progress_bars: Rc<RefCell<HashMap<String, (gtk::ProgressBar, gtk::Label)>>>,
+    pub dl_rows: Rc<RefCell<HashMap<String, (gtk::ProgressBar, gtk::Label)>>>,
     pub loading_toast: Rc<RefCell<Option<adw::Toast>>>,
     pub opening_toast: Rc<RefCell<Option<adw::Toast>>>,
     pub opening_toast_shown_at: Rc<RefCell<Option<std::time::Instant>>>,
     pub loading_gen: Rc<Cell<u32>>,
     pub home_acts: Rc<RefCell<Vec<Option<usize>>>>,
+    pub dl_manager: crate::download::DownloadManager,
 }
 
-pub(crate) fn resolve_upscale_shader(name: &str) -> Option<String> {
-    use std::sync::OnceLock;
+/// Geri-dönüş geçiş bayrağı (switch içinde tüketilir).
+static BACK_ANIM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// İnternet durumu (60sn TTL önbellekli; geri-dönüşte senkron ağı engeller).
+fn cached_internet_status() -> crate::api::InternetStatus {
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+    static CACHE: OnceLock<Mutex<(Option<Instant>, Option<crate::api::InternetStatus>)>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new((None, None)));
+    if let Ok(guard) = cache.lock() {
+        if let (Some(at), Some(st)) = (&guard.0, &guard.1) {
+            if at.elapsed() < Duration::from_secs(60) {
+                return st.clone();
+            }
+        }
+    }
+    let st = crate::api::check_internet();
+    if let Ok(mut guard) = cache.lock() {
+        *guard = (Some(Instant::now()), Some(st.clone()));
+    }
+    st
+}
+
+pub(crate) fn resolve_upscale_shader(name: &str) -> Option<String> {    use std::sync::OnceLock;
     use std::sync::Mutex;
 
     // Embedded shader içeriği (binary'ye gömülü, AppImage extract'ten bağımsız).
@@ -131,24 +175,6 @@ pub(crate) fn resolve_upscale_shader(name: &str) -> Option<String> {
     candidates.into_iter().find(|p| p.exists()).map(|p| p.to_string_lossy().into_owned())
 }
 
-fn aniskip_input_conf(t: &api::AniSkipTimes) -> String {
-    let fmt_sec = |sec: f64| -> String {
-        let s = sec as u64;
-        format!("{:02}:{:02}", s / 60, s % 60)
-    };
-    let skip_cmd = if let (Some(st), Some(et)) = (t.op_start, t.op_end) {
-        format!("s seek {et:.1} absolute; show-text \"⏩ İntro Atlandı (AniSkip: {} → {})\" 3000\n", fmt_sec(st), fmt_sec(et))
-    } else {
-        "s show-text \"⚠️ İntro zamanı bulunamadı (AniSkip)\" 2500\n".to_string()
-    };
-    let outro_cmd = if let (Some(st), Some(et)) = (t.ed_start, t.ed_end) {
-        format!("e seek {et:.1} absolute; show-text \"⏩ Outro Atlandı (AniSkip: {} → {})\" 3000\n", fmt_sec(st), fmt_sec(et))
-    } else {
-        "e show-text \"⚠️ Outro zamanı bulunamadı (AniSkip)\" 2500\n".to_string()
-    };
-    format!("{skip_cmd}{outro_cmd}S seek -30; show-text \"⏪ 30s Geri\" 2000\nEnd ignore\n")
-}
-
 impl App {
     pub fn new(app: &adw::Application) -> Rc<Self> {
         let client = Arc::new(Client::new());
@@ -169,40 +195,12 @@ impl App {
         title_label.set_max_width_chars(28);
         header.set_title_widget(Some(&title_label));
 
-        let back_btn = gtk::Button::from_icon_name("go-previous-symbolic");
-        back_btn.add_css_class("flat");
-        back_btn.add_css_class("circular");
-        back_btn.set_tooltip_text(Some("Geri"));
-        header.pack_start(&back_btn);
-
         let search_toggle_btn = gtk::Button::from_icon_name("system-search-symbolic");
         search_toggle_btn.add_css_class("flat");
         search_toggle_btn.add_css_class("circular");
         search_toggle_btn.set_tooltip_text(Some("Arama Yap"));
         header.pack_end(&search_toggle_btn);
-
-        let nav_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        let fav_btn = gtk::Button::with_label("Favoriler");
-        fav_btn.add_css_class("flat");
-        fav_btn.add_css_class("header-nav-btn");
-
-        let marathon_btn = gtk::Button::with_label("Maraton");
-        marathon_btn.add_css_class("flat");
-        marathon_btn.add_css_class("header-nav-btn");
-
-        let hist_btn = gtk::Button::with_label("Geçmiş");
-        hist_btn.add_css_class("flat");
-        hist_btn.add_css_class("header-nav-btn");
-
-        let settings_btn = gtk::Button::with_label("Ayarlar");
-        settings_btn.add_css_class("flat");
-        settings_btn.add_css_class("header-nav-btn");
-
-        nav_box.append(&fav_btn);
-        nav_box.append(&marathon_btn);
-        nav_box.append(&hist_btn);
-        nav_box.append(&settings_btn);
-        header.pack_end(&nav_box);
+        // Araçlar butonu App::new sonunda (goto kablosu Rc gerektirir) eklenir.
 
         let search_entry = gtk::SearchEntry::new();
         search_entry.set_placeholder_text(Some("Anime, dizi veya film ara…"));
@@ -241,9 +239,21 @@ impl App {
         let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&main_stack));
         overlay.add_overlay(&loading);
+
+        // Yüzen geri butonu: canvas içinde sağ üst, her zaman en üst katman.
+        let float_back = gtk::Button::from_icon_name("go-previous-symbolic");
+        float_back.add_css_class("tools-back-float");
+        float_back.set_tooltip_text(Some("Geri"));
+        float_back.set_halign(gtk::Align::Start);
+        float_back.set_valign(gtk::Align::Start);
+        float_back.set_margin_top(16);
+        float_back.set_margin_start(16);
+        float_back.set_visible(false);
+        overlay.add_overlay(&float_back);
         overlay.set_vexpand(true);
         overlay.set_hexpand(true);
 
+        let header_for_tools = header.clone();
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
         content.append(&header);
         content.append(&search_bar);
@@ -265,10 +275,15 @@ impl App {
 
         let covers = CoverManager::new(client.clone());
 
+        let (dl_tx, dl_rx) = std::sync::mpsc::channel::<crate::download::UiEvent>();
+        let dl_manager =
+            crate::download::DownloadManager::new(crate::download::queue_file_path(), dl_tx);
+
         let app_inst = Rc::new(Self {
             window,
             stack: main_stack,
-            back_btn,
+            float_back,
+            tools_menu: Rc::new(RefCell::new(None)),
             search_toggle_btn,
             title_label,
             search_bar,
@@ -283,22 +298,118 @@ impl App {
             settings: Rc::new(RefCell::new(client.load_settings())),
             progress: Rc::new(RefCell::new(client.load_state().progress)),
             progress_bars: Rc::new(RefCell::new(HashMap::new())),
+            dl_rows: Rc::new(RefCell::new(HashMap::new())),
             loading_toast: Rc::new(RefCell::new(None)),
             opening_toast: Rc::new(RefCell::new(None)),
             opening_toast_shown_at: Rc::new(RefCell::new(None)),
             loading_gen: Rc::new(Cell::new(0)),
-            fav_btn,
-            marathon_btn,
-            hist_btn,
-            settings_btn,
             home_acts: Rc::new(RefCell::new(Vec::new())),
+            dl_manager,
         });
+        {
+            // Araçlar menüsü: goto kablosu Rc gerektirdiği için burada kurulur.
+            let inst = app_inst.clone_ref();
+            let goto: Rc<dyn Fn(usize)> = Rc::new(move |i| {
+                let target = match i {
+                    0 => Page::Favs,
+                    1 => Page::Marathon,
+                    2 => Page::History,
+                    3 => Page::Downloads,
+                    _ => Page::Settings,
+                };
+                let mut st = inst.page_history.borrow_mut();
+                if st.last() != Some(&target) {
+                    st.push(target.clone());
+                }
+                drop(st);
+                inst.show_page(&target);
+            });
+            let settings_c = app_inst.settings.clone();
+            let shortcut_label: Rc<dyn Fn() -> String> =
+                Rc::new(move || settings_c.borrow().tools_shortcut.clone());
+            let menu = crate::ui::tools_menu::ToolsMenu::build(
+                goto,
+                app_inst.toast.clone(),
+                app_inst.client.clone(),
+                shortcut_label,
+            );
+            header_for_tools.pack_end(&menu.button());
+            *app_inst.tools_menu.borrow_mut() = Some(menu);
+        }
         {
             // Aicix init deferred to Aşama 2
         }
 
         app_inst.chain_signals();
         app_inst.apply_ui_scale();
+        crate::theme::apply_theme(&app_inst.window, &app_inst.settings.borrow().theme);
+        crate::ui::tools_menu::ensure_tools_css();
+        {
+            // İndirme pompası: kuyruk olaylarını arayüze taşır.
+            let pump = app_inst.clone_ref();
+            let rx = std::sync::Arc::new(std::sync::Mutex::new(dl_rx));
+            glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
+                let mut progress_dirty = false;
+                let mut struct_dirty = false;
+                let mut toasts: Vec<String> = Vec::new();
+                loop {
+                    let ev = rx.lock().unwrap().try_recv();
+                    match ev {
+                        Ok(crate::download::UiEvent::Tick) => progress_dirty = true,
+                        Ok(crate::download::UiEvent::Changed) => struct_dirty = true,
+                        Ok(crate::download::UiEvent::Toast(m)) => toasts.push(m),
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                    }
+                }
+                for m in toasts {
+                    let t = adw::Toast::new(&m);
+                    t.set_timeout(3);
+                    pump.toast.add_toast(t);
+                }
+                if pump.stack.visible_child_name().as_deref() == Some("downloads") {
+                    if struct_dirty {
+                        // Kaydırma konumunu koruyarak yeniden kur.
+                        let saved = pump
+                            .stack
+                            .child_by_name("downloads")
+                            .and_then(|w| w.downcast::<gtk::ScrolledWindow>().ok())
+                            .map(|s| s.vadjustment().value());
+                        pump.show_page(&Page::Downloads);
+                        if let Some(v) = saved {
+                            let stack_c = pump.stack.clone();
+                            glib::idle_add_local_once(move || {
+                                if let Some(w) =
+                                    stack_c.child_by_name("downloads")
+                                {
+                                    if let Ok(s) =
+                                        w.downcast::<gtk::ScrolledWindow>()
+                                    {
+                                        let adj = s.vadjustment();
+                                        let max = (adj.upper() - adj.page_size()).max(0.0);
+                                        adj.set_value(v.min(max));
+                                    }
+                                }
+                            });
+                        }
+                    } else if progress_dirty {
+                        // Yerinde güncelle: yeniden kurulum yok, kaydırma oynamaz.
+                        let items = pump.dl_manager.snapshot();
+                        let rows = pump.dl_rows.borrow();
+                        for rec in &items {
+                            if let Some((bar, lbl)) = rows.get(&rec.id) {
+                                let (f, txt, stxt) =
+                                    crate::ui::downloads_view::DownloadsView::row_state(rec);
+                                bar.set_fraction(f);
+                                bar.set_text(Some(&txt));
+                                lbl.set_text(&stxt);
+                            }
+                        }
+                    }
+                }
+                glib::ControlFlow::Continue
+            });
+        }
         app_inst.show_page(&initial_page);
         if welcome_seen {
             app_inst.fetch_home();
@@ -311,7 +422,8 @@ impl App {
         Rc::new(Self {
             window: self.window.clone(),
             stack: self.stack.clone(),
-            back_btn: self.back_btn.clone(),
+            float_back: self.float_back.clone(),
+            tools_menu: self.tools_menu.clone(),
             search_toggle_btn: self.search_toggle_btn.clone(),
             title_label: self.title_label.clone(),
             search_bar: self.search_bar.clone(),
@@ -326,15 +438,13 @@ impl App {
             settings: self.settings.clone(),
             progress: self.progress.clone(),
             progress_bars: self.progress_bars.clone(),
+            dl_rows: self.dl_rows.clone(),
             loading_toast: self.loading_toast.clone(),
             opening_toast: self.opening_toast.clone(),
             opening_toast_shown_at: self.opening_toast_shown_at.clone(),
             loading_gen: self.loading_gen.clone(),
-            fav_btn: self.fav_btn.clone(),
-            marathon_btn: self.marathon_btn.clone(),
-            hist_btn: self.hist_btn.clone(),
-            settings_btn: self.settings_btn.clone(),
             home_acts: self.home_acts.clone(),
+            dl_manager: self.dl_manager.clone(),
         })
     }
 
@@ -349,7 +459,8 @@ impl App {
                     this.client.set_search_tip_seen(true);
                     let sc = this.settings.borrow().search_shortcut.clone();
                     let toast = adw::Toast::new(&format!(
-                        "💡 '{}' kısayolu ile arama çubuğunu hızlıca açabilirsiniz!", sc
+                        "💡 '{}' kısayolu ile arama çubuğunu hızlıca açabilirsiniz!",
+                        glib::markup_escape_text(&sc)
                     ));
                     toast.set_timeout(4);
                     this.toast.add_toast(toast);
@@ -358,17 +469,8 @@ impl App {
         });
 
         let this = self.clone_ref();
-        self.back_btn.connect_clicked(move |_| {
-            let mut st = this.page_history.borrow_mut();
-            if st.len() > 1 {
-                st.pop();
-                while st.len() > 1 && st.last() == st.get(st.len() - 2) {
-                    st.pop();
-                }
-            }
-            let top = st.last().cloned().unwrap_or(Page::Home);
-            drop(st);
-            this.show_page(&top);
+        self.float_back.connect_clicked(move |_| {
+            this.go_back();
         });
 
         let this = self.clone_ref();
@@ -379,51 +481,13 @@ impl App {
             }
         });
 
-        let this = self.clone_ref();
-        self.fav_btn.connect_clicked(move |_| {
-            let mut st = this.page_history.borrow_mut();
-            if st.last() != Some(&Page::Favs) {
-                st.push(Page::Favs);
-            }
-            drop(st);
-            this.show_page(&Page::Favs);
-        });
-
-        let this = self.clone_ref();
-        self.marathon_btn.connect_clicked(move |_| {
-            let mut st = this.page_history.borrow_mut();
-            if st.last() != Some(&Page::Marathon) {
-                st.push(Page::Marathon);
-            }
-            drop(st);
-            this.show_page(&Page::Marathon);
-        });
-
-        let this = self.clone_ref();
-        self.hist_btn.connect_clicked(move |_| {
-            let mut st = this.page_history.borrow_mut();
-            if st.last() != Some(&Page::History) {
-                st.push(Page::History);
-            }
-            drop(st);
-            this.show_page(&Page::History);
-        });
-
-        let this = self.clone_ref();
-        self.settings_btn.connect_clicked(move |_| {
-            let mut st = this.page_history.borrow_mut();
-            if st.last() != Some(&Page::Settings) {
-                st.push(Page::Settings);
-            }
-            drop(st);
-            this.show_page(&Page::Settings);
-        });
-
         {
             let this = self.clone_ref();
             let search_bar = self.search_bar.clone();
             let search_entry = self.search_entry.clone();
             let settings = self.settings.clone();
+            let window_c = self.window.clone();
+            let tools_c = self.tools_menu.clone();
             let key_ctrl = gtk::EventControllerKey::new();
             key_ctrl.connect_key_pressed(move |_, keyval, _, state| {
                 let sc = settings.borrow().search_shortcut.clone();
@@ -444,11 +508,55 @@ impl App {
                     }
                     glib::Propagation::Stop
                 } else {
-                    glib::Propagation::Proceed
+                    // Araçlar kısayolu (ayarlanabilir; çıplak T metin alanında yutulur).
+                    let tsc = settings.borrow().tools_shortcut.clone();
+                    let is_alt = state.contains(gtk::gdk::ModifierType::ALT_MASK);
+                    let editable = gtk::prelude::GtkWindowExt::focus(&window_c)
+                        .map(|f| {
+                            f.is::<gtk::SearchEntry>()
+                                || f.is::<gtk::Entry>()
+                                || f.is::<gtk::Text>()
+                                || f.is::<gtk::SpinButton>()
+                                || f.is::<gtk::PasswordEntry>()
+                        })
+                        .unwrap_or(false);
+                    if crate::ui::tools_menu::match_tools_shortcut(
+                        &tsc, &key_name, is_ctrl, is_alt, editable,
+                    ) {
+                        if let Some(menu) = tools_c.borrow().as_ref() {
+                            let toast_c = this.toast.clone();
+                            let client_c = this.client.clone();
+                            let settings_c2 = settings.clone();
+                            let lbl: Rc<dyn Fn() -> String> = Rc::new(move || {
+                                settings_c2.borrow().tools_shortcut.clone()
+                            });
+                            if menu.is_open() {
+                                menu.close();
+                            } else {
+                                menu.open(&toast_c, &client_c, &lbl);
+                            }
+                        }
+                        glib::Propagation::Stop
+                    } else {
+                        glib::Propagation::Proceed
+                    }
                 }
             });
             self.window.add_controller(key_ctrl);
         }
+    }
+
+    pub fn go_back(&self) {
+        BACK_ANIM.store(true, std::sync::atomic::Ordering::SeqCst);
+        let mut st = self.page_history.borrow_mut();        if st.len() > 1 {
+            st.pop();
+            while st.len() > 1 && st.last() == st.get(st.len() - 2) {
+                st.pop();
+            }
+        }
+        let top = st.last().cloned().unwrap_or(Page::Home);
+        drop(st);
+        self.show_page(&top);
     }
 
     pub fn busy(&self, on: bool) {
@@ -576,7 +684,8 @@ impl App {
     pub fn show_page(&self, page: &Page) {
         use gtk::prelude::IsA;
         self.progress_bars.borrow_mut().clear();
-        self.back_btn.set_sensitive(self.page_history.borrow().len() > 1);
+        self.float_back
+            .set_visible(self.page_history.borrow().len() > 1);
 
         fn switch<T: IsA<gtk::Widget>>(
             stack: &gtk::Stack,
@@ -589,6 +698,13 @@ impl App {
             }
             stack.set_transition_type(transition);
             stack.add_named(&widget, Some(name));
+            // Geri-dönüş bayrağı: hafif SlideRight, yoksa ileri varsayılanı.
+            if BACK_ANIM.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                stack.set_transition_type(gtk::StackTransitionType::SlideRight);
+                stack.set_transition_duration(120);
+            } else {
+                stack.set_transition_duration(220);
+            }
             stack.set_visible_child_name(name);
 
             let stack_c = stack.clone();
@@ -632,6 +748,10 @@ impl App {
             Page::History => {
                 self.title_label.set_text("İzleme Geçmişi");
                 switch(&self.stack, "history", gtk::StackTransitionType::Crossfade, self.build_history_view());
+            }
+            Page::Downloads => {
+                self.title_label.set_text("İndirilenler");
+                switch(&self.stack, "downloads", gtk::StackTransitionType::Crossfade, self.build_downloads_view());
             }
             Page::Settings => {
                 self.title_label.set_text("Ayarlar");
@@ -685,6 +805,10 @@ impl App {
                 self.page_history.borrow_mut().push(Page::History);
                 self.show_page(&Page::History);
             }
+            "downloads" => {
+                self.page_history.borrow_mut().push(Page::Downloads);
+                self.show_page(&Page::Downloads);
+            }
             "settings" => {
                 self.page_history.borrow_mut().push(Page::Settings);
                 self.show_page(&Page::Settings);
@@ -716,165 +840,35 @@ impl App {
         }
     }
 
-    fn build_welcome_view(&self) -> gtk::ScrolledWindow {
-        let scroll = gtk::ScrolledWindow::new();
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 16);
-        root.set_margin_top(20);
-        root.set_margin_bottom(24);
-        root.set_margin_start(24);
-        root.set_margin_end(24);
-
-        let header_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        header_box.set_halign(gtk::Align::Center);
-
-        let icon = gtk::Image::from_icon_name("tr.com.animecix");
-        icon.set_pixel_size(84);
-        header_box.append(&icon);
-
-        let title = gtk::Label::new(Some("AnimeciX Masaüstü Kurulum & Kontrol Sihirbazı"));
-        title.add_css_class("title-1");
-        header_box.append(&title);
-
-        let desc = gtk::Label::new(Some(
-            "Uygulamayı kullanmaya başlamadan önce sistem bağımlılıklarını ve masaüstü entegrasyonunu kontrol edin."
-        ));
-        desc.add_css_class("dim-label");
-        desc.set_wrap(true);
-        desc.set_justify(gtk::Justification::Center);
-        header_box.append(&desc);
-
-        root.append(&header_box);
-
-        let dep_group = adw::PreferencesGroup::new();
-        dep_group.set_title("1. Sistem Bağımlılık Kontrolü");
-        dep_group.set_description(Some("Uygulamanın sorunsuz çalışabilmesi için gerekli sistem araçları:"));
-
-        let deps = check_all_dependencies();
-        for dep in &deps {
-            let row = adw::ActionRow::new();
-            row.set_title(dep.name);
-            row.set_subtitle(dep.desc);
-
-            let status_badge = gtk::Label::new(None);
-            status_badge.set_valign(gtk::Align::Center);
-            if dep.installed {
-                status_badge.set_markup("<span foreground='#2ec27e' weight='bold'>🟢 Yüklü</span>");
-            } else {
-                status_badge.set_markup("<span foreground='#e01b24' weight='bold'>🔴 Eksik</span>");
-                if let Some(cmd) = &dep.install_cmd {
-                    row.set_subtitle(&format!("{} • Kurulum: {}", dep.desc, cmd));
-                }
-            }
-            row.add_suffix(&status_badge);
-            dep_group.add(&row);
-        }
-
-        root.append(&dep_group);
-
-        let desktop_group = adw::PreferencesGroup::new();
-        desktop_group.set_title("2. Masaüstü Uygulama Menüsü Entegrasyonu");
-        desktop_group.set_description(Some("AnimeciX'i işletim sisteminizin uygulama başlatıcı menüsüne ekleyin (AppImage ~/.local/bin konumuna kopyalanır):"));
-
-        let desktop_row = adw::ActionRow::new();
-        desktop_row.set_title("Masaüstü Menü Başlatıcısı (tr.com.animecix.desktop)");
-
-        let is_installed = check_desktop_entry_installed();
-        let desktop_status_lbl = gtk::Label::new(None);
-        desktop_status_lbl.set_valign(gtk::Align::Center);
-
-        let desktop_btn = gtk::Button::new();
-        desktop_btn.set_valign(gtk::Align::Center);
-        desktop_btn.add_css_class("pill");
-
-        if is_installed {
-            desktop_status_lbl.set_markup("<span foreground='#2ec27e' weight='bold'>🟢 Menüde Ekli</span>");
-            desktop_row.set_subtitle("AnimeciX uygulama menünüzde hazır.");
-            desktop_btn.set_label("Yeniden Entegre Et 📌");
-            desktop_btn.add_css_class("flat");
-        } else {
-            desktop_status_lbl.set_markup("<span foreground='#f5c211' weight='bold'>🟡 Menüde Yok</span>");
-            desktop_row.set_subtitle("Uygulama menüsüne eklemek için butona tıklayın.");
-            desktop_btn.set_label("Uygulamalar Listesine Ekle 📌");
-            desktop_btn.add_css_class("suggested-action");
-        }
-
-        let this_desk = self.clone_ref();
-        let lbl_clone = desktop_status_lbl.clone();
-        let row_clone = desktop_row.clone();
-        let btn_clone = desktop_btn.clone();
-
-        desktop_btn.connect_clicked(move |_| {
-            match install_desktop_entry() {
-                Ok(_) => {
-                    lbl_clone.set_markup("<span foreground='#2ec27e' weight='bold'>🟢 Başarıyla Eklendi</span>");
-                    row_clone.set_subtitle("AnimeciX masaüstü uygulama menüsüne eklendi!");
-                    btn_clone.set_label("Yeniden Entegre Et 📌");
-                    btn_clone.remove_css_class("suggested-action");
-                    btn_clone.add_css_class("flat");
-
-                    let toast = adw::Toast::new("📌 AnimeciX masaüstü uygulama menüsüne eklendi!");
-                    toast.set_timeout(4);
-                    this_desk.toast.add_toast(toast);
-                }
-                Err(e) => {
-                    let toast = adw::Toast::new(&format!("⚠️ Masaüstü menüsüne eklenemedi: {e}"));
-                    this_desk.toast.add_toast(toast);
-                }
-            }
-        });
-
-        desktop_row.add_suffix(&desktop_status_lbl);
-        desktop_row.add_suffix(&desktop_btn);
-        desktop_group.add(&desktop_row);
-        root.append(&desktop_group);
-
-        let player_group = adw::PreferencesGroup::new();
-        player_group.set_title("3. Hızlı Başlangıç Tercihleri");
-
-        let fs_row = adw::SwitchRow::new();
-        fs_row.set_title("MPV Otomatik Tam Ekran");
-        fs_row.set_subtitle("Video başladığında MPV'yi otomatik tam ekran modunda açar");
-        fs_row.set_active(self.settings.borrow().auto_fullscreen);
-
-        let aniskip_row = adw::SwitchRow::new();
-        aniskip_row.set_title("AniSkip Otomatik İntro Atlama Entegrasyonu");
-        aniskip_row.set_subtitle("AniSkip API üzerinden 's' kısayol tuşu ile intro bitişine otomatik atlar");
-        aniskip_row.set_active(self.settings.borrow().aniskip_enabled);
-
-        player_group.add(&fs_row);
-        player_group.add(&aniskip_row);
-        root.append(&player_group);
-
-        let start_btn = gtk::Button::with_label("Kurulumu Tamamla ve Başlat 🚀");
-        start_btn.add_css_class("suggested-action");
-        start_btn.add_css_class("pill");
-        start_btn.add_css_class("title-3");
-        start_btn.set_halign(gtk::Align::Center);
-        start_btn.set_margin_top(12);
-
+    fn build_welcome_view(&self) -> gtk::Overlay {
+        let settings = self.settings.borrow().clone();
         let this = self.clone_ref();
-        let fs_r = fs_row.clone();
-        let ani_r = aniskip_row.clone();
-
-        start_btn.connect_clicked(move |_| {
-            let mut s = this.settings.borrow().clone();
-            s.auto_fullscreen = fs_r.is_active();
-            s.aniskip_enabled = ani_r.is_active();
-            this.client.save_settings(&s);
-            *this.settings.borrow_mut() = s;
-
-            this.client.set_welcome_seen(true);
-            this.page_history.borrow_mut().clear();
-            this.page_history.borrow_mut().push(Page::Home);
-            this.show_page(&Page::Home);
-            this.fetch_home();
-        });
-        root.append(&start_btn);
-
-        scroll.set_child(Some(&root));
-        scroll
+        let this_t = self.clone_ref();
+        let this_p = self.clone_ref();
+        crate::ui::welcome::WelcomeView::build(
+            &settings,
+            move |new_s| {
+                this.client.save_settings(&new_s);
+                *this.settings.borrow_mut() = new_s.clone();
+                crate::theme::apply_theme(&this.window, &new_s.theme);
+                this.client.set_welcome_seen(true);
+                this.page_history.borrow_mut().clear();
+                this.page_history.borrow_mut().push(Page::Home);
+                this.show_page(&Page::Home);
+                this.fetch_home();
+            },
+            move |msg| {
+                let t = adw::Toast::new(&msg);
+                t.set_timeout(3);
+                this_t.toast.add_toast(t);
+            },
+            move |theme_id| {
+                crate::theme::apply_theme(&this_p.window, &theme_id);
+            },
+        )
     }
 
+    /// Başlık kartı (kapak hemen yüklenir).
     fn create_title_card(&self, t: &Title) -> gtk::Box {
         let box_ = gtk::Box::new(gtk::Orientation::Vertical, 6);
         box_.add_css_class("title-btn");
@@ -916,16 +910,17 @@ impl App {
 
     fn build_home_view(&self) -> gtk::ScrolledWindow {
         let scroll = gtk::ScrolledWindow::new();
+        scroll.add_css_class("clear-scroll");
         scroll.set_hexpand(true);
         scroll.set_vexpand(true);
 
         let outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
         scroll.set_child(Some(&outer));
 
-        // İnternet bağlantı uyarısı (offline ise)
-        match crate::api::check_internet() {
+        // İnternet bağlantı uyarısı (offline ise; 60sn önbellekli, geri-dönüş donmaz).
+        match cached_internet_status() {
             crate::api::InternetStatus::Online => {}
-            crate::api::InternetStatus::Offline { reason } => {
+            crate::api::InternetStatus::Offline { reason: _ } => {
                 let banner = adw::Banner::new("İnternet bağlantısı yok");
                 banner.set_button_label(Some("Yeniden Kontrol Et"));
                 let this = self.clone_ref();
@@ -959,6 +954,22 @@ impl App {
         main_box.set_margin_bottom(18);
         main_box.set_margin_start(12);
         main_box.set_margin_end(12);
+
+        // Hızlı arama hapı: ortada, ilk rafın üstünde.
+        {
+            let pill = gtk::SearchEntry::new();
+            pill.add_css_class("tools-search-pill");
+            pill.set_placeholder_text(Some("Hızlı ara… (Enter)"));
+            pill.set_halign(gtk::Align::Center);
+            let this = self.clone_ref();
+            pill.connect_activate(move |e| {
+                let q = e.text().to_string();
+                if !q.trim().is_empty() {
+                    this.do_search(q);
+                }
+            });
+            main_box.append(&pill);
+        }
 
         for cat in cats.iter() {
             let shelf_title = gtk::Label::new(Some(&cat.name));
@@ -1104,6 +1115,7 @@ impl App {
 
     fn build_favs_view(&self) -> gtk::ScrolledWindow {
         let scroll = gtk::ScrolledWindow::new();
+        scroll.add_css_class("clear-scroll");
         scroll.set_hexpand(true);
         scroll.set_vexpand(true);
         scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
@@ -1190,6 +1202,7 @@ impl App {
 
     fn build_history_view(&self) -> gtk::ScrolledWindow {
         let scroll = gtk::ScrolledWindow::new();
+        scroll.add_css_class("clear-scroll");
         scroll.set_hexpand(true);
         scroll.set_vexpand(true);
         scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
@@ -1231,6 +1244,28 @@ impl App {
         scroll
     }
 
+    /// Etkin indirme klasörü (ayar boşsa varsayılan; oluşturulur).
+    fn effective_download_dir(&self) -> std::path::PathBuf {
+        let d = self
+            .settings
+            .borrow()
+            .download_dir
+            .clone()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(crate::download::default_download_dir);
+        let _ = std::fs::create_dir_all(&d);
+        d
+    }
+
+    fn build_downloads_view(&self) -> gtk::ScrolledWindow {
+        let (scroll, rows) = crate::ui::downloads_view::DownloadsView::build(
+            &self.dl_manager,
+            self.effective_download_dir(),
+        );
+        *self.dl_rows.borrow_mut() = rows;
+        scroll
+    }
+
     fn build_settings_view(&self) -> gtk::ScrolledWindow {
         let scroll = gtk::ScrolledWindow::new();
         let settings = self.settings.borrow();
@@ -1244,7 +1279,9 @@ impl App {
             move |new_s| {
                 *this_save.settings.borrow_mut() = new_s.clone();
                 this_save.client.save_settings(&new_s);
+                this_save.client.set_cf_clearance(&new_s.cf_clearance);
                 this_save.apply_ui_scale();
+                crate::theme::apply_theme(&this_save.window, &new_s.theme);
                 let now = std::time::Instant::now();
                 let elapsed = now.duration_since(*last_save_c.borrow()).as_millis();
                 *last_save_c.borrow_mut() = now;
@@ -1276,6 +1313,7 @@ impl App {
 
     fn build_search_view(&self) -> gtk::ScrolledWindow {
         let scroll = gtk::ScrolledWindow::new();
+        scroll.add_css_class("clear-scroll");
         let results = self.search_results.borrow();
 
         if results.is_empty() {
@@ -1309,8 +1347,9 @@ impl App {
         scroll
     }
 
-    fn build_episodes_view(&self, title: &Title, eps: &[Episode]) -> gtk::ScrolledWindow {
+    fn build_episodes_view(&self, title: &Title, eps: &[Episode]) -> gtk::Overlay {
         let scroll = gtk::ScrolledWindow::new();
+        scroll.add_css_class("clear-scroll");
 
         let is_movie = title.title_type.as_deref() == Some("movie")
             || (eps.len() <= 1 && eps.first().map(|e| e.name.contains("Filmi")).unwrap_or(false));
@@ -1361,8 +1400,65 @@ impl App {
             self.progress_bars.borrow_mut().insert(prog_key, (movie_pb, movie_lbl));
             movie_view.add_css_class("movie-tint");
             self.apply_movie_tint(&movie_view, title.poster.as_deref());
+
+            let dl_film = gtk::Button::from_icon_name("folder-download-symbolic");
+            dl_film.add_css_class("circular");
+            dl_film.set_halign(gtk::Align::End);
+            dl_film.set_valign(gtk::Align::Start);
+            dl_film.set_margin_top(16);
+            dl_film.set_margin_end(16);
+            dl_film.set_tooltip_text(Some("Filmi indir"));
+            {
+                let this_dl = self.clone_ref();
+                let title_dl = title.clone();
+                dl_film.connect_clicked(move |_| {
+                    let this_q = this_dl.clone_ref();
+                    let this2 = this_dl.clone_ref();
+                    let title2 = title_dl.clone();
+                    this_q.ask_download_quality(move |q| {
+                        let Some(quality) = q else { return };
+                        let title3 = title2.clone();
+                        let dir = this2.effective_download_dir();
+                        this2.busy(true);
+                        this2.spawn(move |c| {
+                            let res = c.resolve_movie(title3.id).map(|url| {
+                                let series = crate::download::sanitize_filename(&title3.name);
+                                let dest = dir.join(&series).join(format!(
+                                    "{} [{}].mp4",
+                                    series,
+                                    crate::download::sanitize_filename(&quality)
+                                ));
+                                crate::download::DownloadRecord {
+                                    id: format!("film:{}:{quality}", title3.id),
+                                    title: series,
+                                    season: 1,
+                                    episode: 1,
+                                    fansub: String::new(),
+                                    quality: quality.clone(),
+                                    url,
+                                    referer: None,
+                                    dest,
+                                    total: 0,
+                                    have: 0,
+                                    status: crate::download::DownloadStatus::Queued,
+                                }
+                            });
+                            move || match res {
+                                Ok(rec) => Msg::DlBatchResolved(vec![rec], Vec::new(), true),
+                                Err(e) => {
+                                    eprintln!("[DL] film çözülemedi: {e}");
+                                    Msg::DlBatchResolved(Vec::new(), vec![e], true)
+                                }
+                            }
+                        });
+                    });
+                });
+            }
             scroll.set_child(Some(&movie_view));
-            return scroll;
+            let overlay = gtk::Overlay::new();
+            overlay.set_child(Some(&scroll));
+            overlay.add_overlay(&dl_film);
+            return overlay;
         }
 
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -1390,7 +1486,149 @@ impl App {
             this_mar.toast.add_toast(toast);
         });
 
-        let detail_header = episodes_view::create_title_detail_header(title, &header_poster, &bookmark_btn, &marathon_btn);
+        // Toplu indirme modu durumu.
+        let dl_mode = Rc::new(Cell::new(false));
+        let dl_checks: Rc<RefCell<Vec<(Episode, gtk::CheckButton)>>> =
+            Rc::new(RefCell::new(Vec::new()));
+
+        let dl_mode_btn = gtk::Button::from_icon_name("folder-download-symbolic");
+        dl_mode_btn.add_css_class("flat");
+        dl_mode_btn.add_css_class("circular");
+        dl_mode_btn.add_css_class("lg-icon");
+        dl_mode_btn.set_valign(gtk::Align::Center);
+        dl_mode_btn.set_tooltip_text(Some("Toplu İndirme Modu"));
+
+        let dl_float = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        dl_float.add_css_class("dl-float-pill");
+        dl_float.set_margin_bottom(20);
+        dl_float.set_margin_start(12);
+        dl_float.set_margin_end(12);
+        let dl_go = gtk::Button::with_label("⬇ İndir (0)");
+        dl_go.add_css_class("suggested-action");
+        dl_go.add_css_class("pill");
+        dl_go.set_sensitive(false);
+        let dl_cancel = gtk::Button::with_label("Vazgeç");
+        dl_cancel.add_css_class("flat");
+        dl_cancel.add_css_class("pill");
+        dl_float.append(&dl_go);
+        dl_float.append(&dl_cancel);
+
+        // Toast gibi altta ortada beliren animasyonlu hap.
+        let dl_reveal = gtk::Revealer::new();
+        dl_reveal.set_transition_type(gtk::RevealerTransitionType::SlideUp);
+        dl_reveal.set_transition_duration(250);
+        dl_reveal.set_halign(gtk::Align::Center);
+        dl_reveal.set_valign(gtk::Align::End);
+        dl_reveal.set_child(Some(&dl_float));
+        dl_reveal.set_visible(false);
+
+        let float_gen: Rc<Cell<u64>> = Rc::new(Cell::new(0));
+        let set_floating = {
+            let dl_reveal = dl_reveal.clone();
+            let float_gen = float_gen.clone();
+            Rc::new(move |show: bool| {
+                let g = float_gen.get() + 1;
+                float_gen.set(g);
+                if show {
+                    dl_reveal.set_visible(true);
+                    dl_reveal.set_reveal_child(true);
+                } else {
+                    dl_reveal.set_reveal_child(false);
+                    let dl_reveal_c = dl_reveal.clone();
+                    let gen_c = float_gen.clone();
+                    glib::timeout_add_local_once(
+                        std::time::Duration::from_millis(260),
+                        move || {
+                            if gen_c.get() == g {
+                                dl_reveal_c.set_visible(false);
+                            }
+                        },
+                    );
+                }
+            })
+        };
+
+        let exit_dl_mode = {
+            let dl_mode = dl_mode.clone();
+            let dl_checks = dl_checks.clone();
+            let hide = set_floating.clone();
+            let dl_mode_btn = dl_mode_btn.clone();
+            Rc::new(move || {
+                dl_mode.set(false);
+                for (_, c) in dl_checks.borrow().iter() {
+                    c.set_active(false);
+                    c.set_visible(false);
+                }
+                hide(false);
+                dl_mode_btn.remove_css_class("suggested-action");
+            })
+        };
+
+        let refresh_dl_bar = {
+            let dl_mode = dl_mode.clone();
+            let dl_checks = dl_checks.clone();
+            let dl_go = dl_go.clone();
+            let show = set_floating.clone();
+            Rc::new(move || {
+                let n = dl_checks.borrow().iter().filter(|(_, c)| c.is_active()).count();
+                dl_go.set_label(&format!("⬇ İndir ({n})"));
+                dl_go.set_sensitive(n > 0);
+                show(dl_mode.get() && n > 0);
+            })
+        };
+
+        {
+            let dl_mode = dl_mode.clone();
+            let dl_checks = dl_checks.clone();
+            let btn_c = dl_mode_btn.clone();
+            let btn_c2 = dl_mode_btn.clone();
+            let refresh = refresh_dl_bar.clone();
+            let exit = exit_dl_mode.clone();
+            btn_c.connect_clicked(move |_| {
+                if dl_mode.get() {
+                    exit();
+                } else {
+                    dl_mode.set(true);
+                    for (_, c) in dl_checks.borrow().iter() {
+                        c.set_visible(true);
+                    }
+                    btn_c2.add_css_class("suggested-action");
+                }
+                refresh();
+            });
+        }
+        {
+            let exit = exit_dl_mode.clone();
+            dl_cancel.connect_clicked(move |_| exit());
+        }
+        {
+            let this_go = self.clone_ref();
+            let title_go = title.clone();
+            let dl_checks_go = dl_checks.clone();
+            let exit = exit_dl_mode.clone();
+            dl_go.connect_clicked(move |_| {
+                let eps: Vec<Episode> = dl_checks_go
+                    .borrow()
+                    .iter()
+                    .filter(|(_, c)| c.is_active())
+                    .map(|(e, _)| e.clone())
+                    .collect();
+                if eps.is_empty() {
+                    return;
+                }
+                exit();
+                let this_q = this_go.clone_ref();
+                let this2 = this_go.clone_ref();
+                let title2 = title_go.clone();
+                this_q.ask_download_quality(move |q| {
+                    if let Some(quality) = q {
+                        this2.start_download_prefetch(title2.clone(), eps.clone(), quality, false);
+                    }
+                });
+            });
+        }
+
+        let detail_header = episodes_view::create_title_detail_header(title, &header_poster, &bookmark_btn, &marathon_btn, &dl_mode_btn);
         root.append(&detail_header);
 
         let settings = self.settings.borrow();
@@ -1468,6 +1706,8 @@ impl App {
             );
             root.append(&sp);
         } else {
+            // Tek disk okuma: satır başına load_state() donmayı önler.
+            let watched_all = self.client.load_state().watched;
             let rows: Vec<(Episode, gtk::Box)> = eps.iter().map(|e| {
                 let key = format!("{}:{}:{}", title.id, e.season, e.episode);
 
@@ -1518,7 +1758,7 @@ impl App {
                 }
                 right_col.append(&progress_bar);
 
-                self.progress_bars.borrow_mut().insert(key.clone(), (progress_bar, time_lbl));
+                self.progress_bars.borrow_mut().insert(key.clone(), (progress_bar.clone(), time_lbl.clone()));
 
                 let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
                 row.set_margin_top(6);
@@ -1526,12 +1766,27 @@ impl App {
                 row.set_margin_start(14);
                 row.set_margin_end(14);
                 row.set_valign(gtk::Align::Center);
+
+                let check = gtk::CheckButton::new();
+                check.set_valign(gtk::Align::Center);
+                check.set_visible(false);
+                check.set_tooltip_text(Some("İndirme için seç"));
+                {
+                    let refresh_c = refresh_dl_bar.clone();
+                    check.connect_toggled(move |_| refresh_c());
+                }
+                row.prepend(&check);
+                dl_checks.borrow_mut().push((e.clone(), check.clone()));
+
                 row.append(&pic);
                 row.append(&right_col);
 
                 let is_watched = Rc::new(RefCell::new(
-                    self.client.is_watched(title.id, e.season, e.episode)
-                    || (saved_dur > 0.0 && saved_pos / saved_dur > 0.9)
+                    watched_all
+                        .get(&title.id.to_string())
+                        .map(|l| l.iter().any(|x| x.episode == e.episode && x.season == e.season))
+                        .unwrap_or(false)
+                        || (saved_dur > 0.0 && saved_pos / saved_dur > 0.9)
                 ));
 
                 let done_icon = gtk::Image::from_icon_name("object-select-symbolic");
@@ -1541,12 +1796,48 @@ impl App {
                 done_icon.set_visible(*is_watched.borrow());
                 row.append(&done_icon);
 
+                let dl_one = gtk::Button::from_icon_name("folder-download-symbolic");
+                dl_one.add_css_class("flat");
+                dl_one.add_css_class("circular");
+                dl_one.set_valign(gtk::Align::Center);
+                dl_one.set_tooltip_text(Some("Bölümü indir"));
+                {
+                    let this_dl = self.clone_ref();
+                    let title_dl = title.clone();
+                    let ep_dl = e.clone();
+                dl_one.connect_clicked(move |_| {
+                    let this_q = this_dl.clone_ref();
+                    let this2 = this_dl.clone_ref();
+                    let title2 = title_dl.clone();
+                    let ep2 = ep_dl.clone();
+                    this_q.ask_download_quality(move |q| {
+                            if let Some(quality) = q {
+                                this2.start_download_prefetch(title2.clone(), vec![ep2.clone()], quality, true);
+                            }
+                        });
+                    });
+                }
+                row.append(&dl_one);
+
                 let this_play = self.clone_ref();
                 let title_play = title.clone();
                 let ep_play = e.clone();
+                let row_c = row.clone();
+                let check_c = check.clone();
+                let dl_one_c = dl_one.clone();
                 let click = gtk::GestureClick::new();
                 click.set_button(1); // sadece sol tık
-                click.connect_pressed(move |_, _, _, _| {
+                click.connect_pressed(move |_, _, x, y| {
+                    // Düğme/checkbox tıklaması satırı oynatmasın.
+                    for w in [check_c.upcast_ref::<gtk::Widget>(), dl_one_c.upcast_ref::<gtk::Widget>()] {
+                        if let Some(r) = w.compute_bounds(&row_c) {
+                            let (bx, by, bw, bh) =
+                                (r.x() as f64, r.y() as f64, r.width() as f64, r.height() as f64);
+                            if x >= bx && x <= bx + bw && y >= by && y <= by + bh {
+                                return;
+                            }
+                        }
+                    }
                     this_play.play(&title_play, &ep_play);
                 });
                 row.add_controller(click);
@@ -1557,6 +1848,11 @@ impl App {
                 let is_watched_ctx = is_watched.clone();
                 let done_icon_ctx = done_icon.clone();
                 let row_ctx = row.clone();
+                let bar_ctx = progress_bar.clone();
+                let lbl_ctx = time_lbl.clone();
+                let key_ctx = key.clone();
+                let progress_ctx = self.progress.clone();
+                let bars_ctx = self.progress_bars.clone();
 
                 let right_click = gtk::GestureClick::new();
                 right_click.set_button(3);
@@ -1564,14 +1860,13 @@ impl App {
                     gesture.set_state(gtk::EventSequenceState::Claimed);
 
                     let currently_watched = *is_watched_ctx.borrow();
-                    let label = if currently_watched {
+
+                    let toggle_label = if currently_watched {
                         "✖ İzlenmedi Olarak İşaretle"
                     } else {
                         "✅ İzlendi Olarak İşaretle"
-                    };
-
-                    let menu_model = gio::Menu::new();
-                    menu_model.append(Some(label), Some("row.toggle-watched"));
+                    }
+                    .to_string();
 
                     let client_c = this_ctx.client.clone();
                     let title_c = title_ctx.clone();
@@ -1580,9 +1875,7 @@ impl App {
                     let done_icon_c = done_icon_ctx.clone();
                     let this_refresh = this_ctx.clone_ref();
 
-                    let action_group = gio::SimpleActionGroup::new();
-                    let action = gio::SimpleAction::new("toggle-watched", None);
-                    action.connect_activate(move |_, _| {
+                    let on_toggle: Rc<dyn Fn()> = Rc::new(move || {
                         let was_watched = *is_watched_c.borrow();
                         if was_watched {
                             client_c.remove_watched(title_c.id, ep_c.season, ep_c.episode);
@@ -1608,15 +1901,37 @@ impl App {
                         toast.set_timeout(2);
                         this_refresh.toast.add_toast(toast);
                     });
-                    action_group.add_action(&action);
-                    row_ctx.insert_action_group("row", Some(&action_group));
+                    let client_d = this_ctx.client.clone();
+                    let title_d = title_ctx.clone();
+                    let ep_d = ep_ctx.clone();
+                    let is_watched_d = is_watched_ctx.clone();
+                    let done_icon_d = done_icon_ctx.clone();
+                    let bar_d = bar_ctx.clone();
+                    let lbl_d = lbl_ctx.clone();
+                    let key_d = key_ctx.clone();
+                    let progress_d = progress_ctx.clone();
+                    let bars_d = bars_ctx.clone();
+                    let this_refresh_d = this_ctx.clone_ref();
+                    let on_clear: Rc<dyn Fn()> = Rc::new(move || {
+                        client_d.clear_episode(title_d.id, ep_d.season, ep_d.episode);
+                        progress_d.borrow_mut().remove(&key_d);
+                        bars_d.borrow_mut().remove(&key_d);
+                        *is_watched_d.borrow_mut() = false;
+                        done_icon_d.set_visible(false);
+                        bar_d.set_fraction(0.0);
+                        bar_d.set_visible(false);
+                        lbl_d.set_text("");
+                        lbl_d.set_visible(false);
+                        let toast = adw::Toast::new("🧹 Bölüm temizlendi");
+                        toast.set_timeout(2);
+                        this_refresh_d.toast.add_toast(toast);
+                    });
 
-                    let popover = gtk::PopoverMenu::from_model(Some(&menu_model));
-                    popover.set_parent(&row_ctx);
-                    let rect = gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
-                    popover.set_pointing_to(Some(&rect));
-                    popover.set_has_arrow(true);
-                    popover.popup();
+                    crate::ui::row_menu::RowMenu::build(vec![
+                        (toggle_label, on_toggle),
+                        ("🧹 Temizle".to_string(), on_clear),
+                    ])
+                    .popup_at(&row_ctx, x, y);
                 });
                 row.add_controller(right_click);
 
@@ -1647,7 +1962,10 @@ impl App {
         }
 
         scroll.set_child(Some(&root));
-        scroll
+        let page_overlay = gtk::Overlay::new();
+        page_overlay.set_child(Some(&scroll));
+        page_overlay.add_overlay(&dl_reveal);
+        page_overlay
     }
 
     fn spawn<F, R>(&self, f: F)
@@ -1711,8 +2029,8 @@ impl App {
                 Err(e) => self.show_error(&e),
             },
             Msg::Play(title, ep, res) => match res {
-                Ok((fast, fast_embeds, fallback)) => {
-                    self.play_candidates(&title, &ep, &fast, &fast_embeds, &fallback)
+                Ok(src) => {
+                    self.play_candidates(&title, &ep, &src.candidates, &src.fast_embeds, &src.fallback_embeds, src.plan)
                 }
                 Err(e) => self.show_error(&e),
             },
@@ -1722,9 +2040,154 @@ impl App {
             },
             Msg::FansubChosen { title, ep, chosen } => {
                 if let Some(fs) = chosen {
-                    self.play_with_fansub(&title, &ep, &fs);
+                    self.play_with_fansub(&title, &ep, &fs, Vec::new());
                 } else {
                     self.play_resolved(&title, &ep, None);
+                }
+            }
+            Msg::PlayQualities { title, ep, fs, rest, quals } => {
+                self.busy(false);
+                match quals {
+                    Err(_) => self.play_with_fansub_inner(&title, &ep, &fs, rest, None),
+                    Ok(list) => {
+                        let labels: Vec<String> =
+                            list.iter().map(|q| q.label.clone()).collect();
+                        let title_c = title.clone();
+                        let ep_c = ep.clone();
+                        let this_c = self.clone_ref();
+                        crate::ui::play_quality_dialog::show_play_quality_dialog(
+                            &self.window,
+                            &title.name,
+                            &labels,
+                            move |choice| match choice {
+                                crate::ui::play_quality_dialog::PlayChoice::Cancelled => {}
+                                crate::ui::play_quality_dialog::PlayChoice::Best => {
+                                    this_c.play_with_fansub_inner(
+                                        &title_c, &ep_c, &fs, rest.clone(), None,
+                                    );
+                                }
+                                crate::ui::play_quality_dialog::PlayChoice::Quality(
+                                    label,
+                                ) => {
+                                    let forced = list
+                                        .iter()
+                                        .find(|q| q.label == label)
+                                        .cloned();
+                                    this_c.play_with_fansub_inner(
+                                        &title_c, &ep_c, &fs, rest.clone(), forced,
+                                    );
+                                }
+                            },
+                        );
+                    }
+                }
+            }
+            Msg::DlLists { title, quality, items, is_single } => {
+                let with_subs: Vec<(Episode, Vec<api::FansubInfo>)> = items
+                    .into_iter()
+                    .filter(|(_, l)| !l.is_empty())
+                    .collect();
+                if with_subs.is_empty() {
+                    let t = adw::Toast::new("⚠️ Seçili bölümlerde çeviri bulunamadı");
+                    t.set_timeout(3);
+                    self.toast.add_toast(t);
+                    return;
+                }
+                // "Her bölümde sor" kapalıysa ilk çevirmenle sessizce devam.
+                if !self.settings.borrow().fansub_ask_each_time {
+                    let auto: Vec<(Episode, api::FansubInfo)> = with_subs
+                        .into_iter()
+                        .map(|(ep, mut l)| (ep, l.remove(0)))
+                        .collect();
+                    let title_c = title.clone();
+                    let quality_c = quality.clone();
+                    let this_c = self.clone_ref();
+                    let dir = this_c.effective_download_dir();
+                    let series = crate::download::sanitize_filename(&title_c.name);
+                    self.spawn(move |c| {
+                        let mut recs = Vec::new();
+                        let mut skipped = Vec::new();
+                        for (ep, fs) in &auto {
+                            match crate::download::resolve_for_download(
+                                &c, &dir, &series, ep, fs, &quality_c,
+                            ) {
+                                Ok(rec) => recs.push(rec),
+                                Err(e) => {
+                                    eprintln!("[DL] çözümleme atlandı: {e}");
+                                    skipped.push(format!(
+                                        "S{:02}E{:02}: {e}",
+                                        ep.season, ep.episode
+                                    ));
+                                }
+                            }
+                        }
+                        move || Msg::DlBatchResolved(recs, skipped, is_single)
+                    });
+                    return;
+                }
+                let quality_c = quality.clone();
+                let this_c = self.clone_ref();
+                let dir = this_c.effective_download_dir();
+                let series = crate::download::sanitize_filename(&title.name);
+                crate::ui::flashcard::show_flashcard_wizard(
+                    &self.window,
+                    &title,
+                    with_subs,
+                    move |done| {
+                        if done.is_empty() {
+                            return;
+                        }
+                        let dir_c = dir.clone();
+                        let series_c = series.clone();
+                        let quality_cc = quality_c.clone();
+                        this_c.spawn(move |c| {
+                            let mut recs = Vec::new();
+                            let mut skipped = Vec::new();
+                            for (ep, fs) in &done {
+                                match crate::download::resolve_for_download(
+                                    &c, &dir_c, &series_c, ep, fs, &quality_cc,
+                                ) {
+                                    Ok(rec) => recs.push(rec),
+                                    Err(e) => {
+                                        eprintln!("[DL] çözümleme atlandı: {e}");
+                                        skipped.push(format!(
+                                            "S{:02}E{:02}: {e}",
+                                            ep.season, ep.episode
+                                        ));
+                                    }
+                                }
+                            }
+                            move || Msg::DlBatchResolved(recs, skipped, is_single)
+                        });
+                    },
+                );
+            }
+            Msg::DlBatchResolved(recs, skipped, is_single) => {
+                let n = recs.len();
+                let quiet = !is_single;
+                for rec in recs {
+                    self.dl_manager.enqueue(rec, quiet);
+                }
+                // Sayaç yalnızca topluda; tekilde pompa bildirimi yeter.
+                if !is_single && n > 0 {
+                    let t = adw::Toast::new(&format!("⬇ {n} bölüm kuyruğa eklendi"));
+                    t.set_timeout(3);
+                    self.toast.add_toast(t);
+                }
+                if !skipped.is_empty() {
+                    let shown: Vec<&str> =
+                        skipped.iter().take(3).map(|s| s.as_str()).collect();
+                    let more = if skipped.len() > 3 {
+                        format!(" +{}", skipped.len() - 3)
+                    } else {
+                        String::new()
+                    };
+                    let t = adw::Toast::new(&format!(
+                        "⚠ Atlanan: {}{more}",
+                        shown.join(", ")
+                    ));
+                    t.set_timeout(5);
+                    self.toast.add_toast(t);
                 }
             }
         }
@@ -1749,16 +2212,41 @@ impl App {
             return;
         }
         let default_template = self.settings.borrow().default_fansub_template;
+        let manual_s = self.settings.borrow().official_skip_secret.clone();
         self.busy(true);
         let title_s = title.clone();
         let ep_s = ep.clone();
         self.spawn(move |c| {
-            let res = c.list_fansubs(title_s.id, ep_s.episode, ep_s.season);
-            move || Msg::FansubsLoaded {
-                title: title_s,
-                ep: ep_s,
-                fansubs: res,
-                default_template,
+            let mut res = c.list_fansubs(title_s.id, ep_s.episode, ep_s.season);
+            if matches!(&res, Err(e) if api::is_server_error(e)) {
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                res = c.list_fansubs(title_s.id, ep_s.episode, ep_s.season);
+            }
+            // Liste hâlâ sunucu-korumalıysa best-video yedeğine düş (çeviri seçimsiz oynat).
+            let fallback_url = match &res {
+                Err(e) if api::is_server_error(e) => {
+                    c.resolve_best_video(title_s.id, ep_s.episode, ep_s.season).ok()
+                }
+                _ => None,
+            };
+            move || match fallback_url {
+                Some(url) => {
+                    let plan = crate::skip::fetch_plan_for_embeds(
+                        &c, title_s.id, ep_s.season, ep_s.episode, &[], &[], &manual_s,
+                    );
+                    Msg::Play(title_s, ep_s, Ok(PlaySources {
+                        candidates: vec![url],
+                        fast_embeds: Vec::new(),
+                        fallback_embeds: Vec::new(),
+                        plan,
+                    }))
+                }
+                None => Msg::FansubsLoaded {
+                    title: title_s,
+                    ep: ep_s,
+                    fansubs: res.map_err(|e| api::friendly_play_error(&e)),
+                    default_template,
+                },
             }
         });
     }
@@ -1773,13 +2261,18 @@ impl App {
 
         if let Some(tpl) = default_template {
             if let Some(fs) = fansubs.iter().find(|f| f.template_id == tpl) {
-                self.play_with_fansub(&title, &ep, fs);
+                let rest: Vec<api::FansubInfo> = fansubs
+                    .iter()
+                    .filter(|f| f.template_id != tpl)
+                    .cloned()
+                    .collect();
+                self.play_with_fansub(&title, &ep, fs, rest);
                 return;
             }
         }
 
         if fansubs.len() == 1 {
-            self.play_with_fansub(&title, &ep, &fansubs[0]);
+            self.play_with_fansub(&title, &ep, &fansubs[0], Vec::new());
             return;
         }
 
@@ -1787,7 +2280,8 @@ impl App {
         if !ask {
             if let Some(best) = fansubs.first() {
                 eprintln!("[FS] otomatik seçim: {} ({:.2}★)", best.name, best.rating);
-                self.play_with_fansub(&title, &ep, best);
+                let rest: Vec<api::FansubInfo> = fansubs[1..].to_vec();
+                self.play_with_fansub(&title, &ep, best, rest);
                 return;
             }
         }
@@ -1795,20 +2289,100 @@ impl App {
         let title_s = title.clone();
         let ep_s = ep.clone();
         let app_rc = self.clone_ref();
+        let fansubs_for_rest = fansubs.clone();
         crate::ui::fansub_dialog::show_fansub_dialog(
             &self.window,
             &format!("{} — S{:02}E{:02}", title.name, ep.season, ep.episode),
             fansubs,
             move |chosen: api::FansubInfo| {
-                app_rc.play_with_fansub(&title_s, &ep_s, &chosen);
+                let rest: Vec<api::FansubInfo> = fansubs_for_rest
+                    .iter()
+                    .filter(|f| f.template_id != chosen.template_id)
+                    .cloned()
+                    .collect();
+                app_rc.play_with_fansub(&title_s, &ep_s, &chosen, rest);
             },
         );
     }
 
-    fn play_with_fansub(&self, title: &Title, ep: &Episode, fs: &api::FansubInfo) {
+    /// Kalite sorusu (tekli: her indirmede; toplu: grup başı bir kez).
+    fn ask_download_quality(&self, cb: impl Fn(Option<String>) + 'static) {
+        let dialog = adw::MessageDialog::builder()
+            .heading("İndirme Kalitesi")
+            .body("Bu indirme için hangi kalite kullanılsın?")
+            .close_response("cancel")
+            .default_response("best")
+            .build();
+        dialog.set_transient_for(Some(&self.window));
+        dialog.add_response("cancel", "İptal");
+        dialog.add_response("best", "En iyi");
+        dialog.add_response("1080p", "1080p");
+        dialog.add_response("720p", "720p");
+        dialog.add_response("480p", "480p");
+        dialog.set_response_appearance("best", adw::ResponseAppearance::Suggested);
+        dialog.connect_response(None, move |_, resp| match resp {
+            "best" | "1080p" | "720p" | "480p" => cb(Some(resp.to_string())),
+            _ => cb(None),
+        });
+        dialog.present();
+    }
+
+    /// Bölüm listesinin çevirmenlerini worker'da önden çeker.
+    fn start_download_prefetch(&self, title: Title, eps: Vec<Episode>, quality: String, is_single: bool) {
+        self.busy(true);
+        let title_c = title.clone();
+        self.spawn(move |c| {
+            let mut items = Vec::new();
+            for ep in &eps {
+                let fansubs = c.list_fansubs(title_c.id, ep.episode, ep.season).unwrap_or_default();
+                items.push((ep.clone(), fansubs));
+            }
+            move || Msg::DlLists { title: title_c, quality, items, is_single }
+        });
+    }
+
+    fn play_with_fansub(
+        &self,
+        title: &Title,
+        ep: &Episode,
+        fs: &api::FansubInfo,
+        rest: Vec<api::FansubInfo>,
+    ) {
+        // Oynatma kalite sorusu AÇIKSA önce kaliteler çözülür, sonra dialog.
+        if self.settings.borrow().play_ask_quality {
+            let title_c = title.clone();
+            let ep_c = ep.clone();
+            let fs_c = fs.clone();
+            self.busy(true);
+            self.spawn(move |c| {
+                let quals =
+                    crate::play_quality::available_play_qualities(&c, &fs_c.mirrors);
+                move || Msg::PlayQualities {
+                    title: title_c,
+                    ep: ep_c,
+                    fs: fs_c,
+                    rest,
+                    quals,
+                }
+            });
+            return;
+        }
+        self.play_with_fansub_inner(title, ep, fs, rest, None);
+    }
+
+    fn play_with_fansub_inner(
+        &self,
+        title: &Title,
+        ep: &Episode,
+        fs: &api::FansubInfo,
+        rest: Vec<api::FansubInfo>,
+        forced: Option<crate::play_quality::PlayQuality>,
+    ) {
         let toast = adw::Toast::new(&format!(
             "🎬 {} hazırlanıyor ({} · {:.1}★)…",
-            title.name, fs.name, fs.rating
+            glib::markup_escape_text(&title.name),
+            glib::markup_escape_text(&fs.name),
+            fs.rating
         ));
         toast.set_timeout(2);
         self.toast.add_toast(toast);
@@ -1816,35 +2390,74 @@ impl App {
             "[PLAY-FS] {} S{:02}E{:02} → {} ({:.2}★, {} mirror)",
             title.name, ep.season, ep.episode, fs.name, fs.rating, fs.mirror_count
         );
-        let mirror_urls: Vec<String> = fs.mirrors.iter().map(|m| m.url.clone()).collect();
+        let queue = api::fansub_fallback_order(fs, &rest);
         let title_c = title.clone();
         let ep_c = ep.clone();
-        let fansub_name = fs.name.clone();
         let client = self.client.clone();
+        let manual_c = self.settings.borrow().official_skip_secret.clone();
         self.busy(true);
         self.spawn(move |_| {
-            let res = client
-                .resolve_urls(&mirror_urls, mirror_urls.len().max(1))
-                .and_then(|fast_pairs| {
-                    let mut fb = client
-                        .episode_candidates(title_c.id, ep_c.episode, ep_c.season)
-                        .unwrap_or_default();
-                    let tried = 3.min(fb.len());
-                    fb.drain(..tried);
-                    let fast: Vec<String> = fast_pairs.iter().map(|(m, _)| m.clone()).collect();
-                    let fast_emb: Vec<String> = fast_pairs.iter().map(|(_, e)| e.clone()).collect();
-                    Ok((fast, fast_emb, fb))
-                })
-                .or_else(|e| {
-                    eprintln!(
-                        "[PLAY-FS] {} mirror'ları çözülemedi: {}",
-                        fansub_name, e
+            let mut tried: Vec<String> = Vec::new();
+            let mut last_err = String::new();
+            let mut won: Option<(Vec<String>, Vec<String>, Vec<String>)> = None;
+            for f in &queue {
+                let mirror_urls: Vec<String> = f.mirrors.iter().map(|m| m.url.clone()).collect();
+                let res = client
+                    .resolve_urls(&mirror_urls, mirror_urls.len().max(1))
+                    .and_then(|fast_pairs| {
+                        let mut fb = client
+                            .episode_candidates(title_c.id, ep_c.episode, ep_c.season)
+                            .unwrap_or_default();
+                        let tried_n = 3.min(fb.len());
+                        fb.drain(..tried_n);
+                        let fast: Vec<String> = fast_pairs.iter().map(|(m, _)| m.clone()).collect();
+                        let fast_emb: Vec<String> = fast_pairs.iter().map(|(_, e)| e.clone()).collect();
+                        Ok((fast, fast_emb, fb))
+                    });
+                match res {
+                    Ok(ok) => {
+                        if !tried.is_empty() {
+                            eprintln!(
+                                "[PLAY-FS] {} öldü, sıradaki {} açıldı",
+                                tried.join(", "),
+                                f.name
+                            );
+                        }
+                        won = Some(ok);
+                        break;
+                    }
+                    Err(e) => {
+                        eprintln!("[PLAY-FS] {} mirror'ları çözülemedi: {}", f.name, e);
+                        tried.push(f.name.clone());
+                        last_err = e;
+                    }
+                }
+            }
+            let res = match won {
+                Some((mut fast, fast_emb, fb)) => {
+                    // Seçili kalite adayların başına konur (yedekler korunur).
+                    if let Some(pq) = &forced {
+                        if !fast.iter().any(|u| u == &pq.url) {
+                            fast.insert(0, pq.url.clone());
+                        }
+                    }
+                    let plan = crate::skip::fetch_plan_for_embeds(
+                        &client, title_c.id, ep_c.season, ep_c.episode, &fast_emb, &fb, &manual_c,
                     );
-                    Err(format!(
-                        "{} çevirisi oynatılamadı ({}). Başka bir çeviri seçin.",
-                        fansub_name, e
-                    ))
-                });
+                    Ok(PlaySources { candidates: fast, fast_embeds: fast_emb, fallback_embeds: fb, plan })
+                }
+                None if tried.len() <= 1 => Err(format!(
+                    "{} çevirisi oynatılamadı ({}). Başka bir çeviri seçin.",
+                    tried.first().map(String::as_str).unwrap_or("?"),
+                    last_err
+                )),
+                None => Err(format!(
+                    "{} çevirisi denendi ({}) ama hiçbiri açılamadı ({}).",
+                    tried.len(),
+                    tried.join(", "),
+                    last_err
+                )),
+            };
             move || Msg::Play(title_c, ep_c, res)
         });
     }
@@ -1852,17 +2465,24 @@ impl App {
     fn play_resolved(&self, title: &Title, ep: &Episode, _fansub_template: Option<i64>) {
         let toast = adw::Toast::new(&format!(
             "🎬 {} hazırlanıyor…",
-            title.name
+            glib::markup_escape_text(&title.name)
         ));
         toast.set_timeout(2);
         self.toast.add_toast(toast);
         let title = title.clone();
         let ep = ep.clone();
+        let manual_r = self.settings.borrow().official_skip_secret.clone();
         self.busy(true);
         self.spawn(move |c| {
             let pref = c.get_preferred_host(title.id);
             let res = if title.title_type.as_deref() == Some("movie") {
-                c.resolve_movie(title.id).map(|u| (vec![u], Vec::new(), Vec::new()))
+                // Filmde atlama planı yok (bölüm eşlemesi belirsiz).
+                c.resolve_movie(title.id).map(|u| PlaySources {
+                    candidates: vec![u],
+                    fast_embeds: Vec::new(),
+                    fallback_embeds: Vec::new(),
+                    plan: None,
+                })
             } else {
                 c.resolve_top(title.id, ep.episode, ep.season, 3, pref.as_deref())
                     .and_then(|fast_pairs| {
@@ -1876,7 +2496,10 @@ impl App {
                         }
                         let fast: Vec<String> = fast_pairs.iter().map(|(m, _)| m.clone()).collect();
                         let fast_emb: Vec<String> = fast_pairs.iter().map(|(_, e)| e.clone()).collect();
-                        Ok((fast, fast_emb, fb))
+                        let plan = crate::skip::fetch_plan_for_embeds(
+                            &c, title.id, ep.season, ep.episode, &fast_emb, &fb, &manual_r,
+                        );
+                        Ok(PlaySources { candidates: fast, fast_embeds: fast_emb, fallback_embeds: fb, plan })
                     })
             };
             move || Msg::Play(title, ep, res)
@@ -1907,7 +2530,7 @@ impl App {
         !socket_seen && elapsed_secs >= Self::SOCKET_TIMEOUT_SECS
     }
 
-    fn play_candidates(&self, title: &Title, ep: &Episode, candidates: &[String], fast_embeds: &[String], fallback_embeds: &[String]) {
+    fn play_candidates(&self, title: &Title, ep: &Episode, candidates: &[String], fast_embeds: &[String], fallback_embeds: &[String], plan: Option<crate::skip::SkipPlan>) {
         let w = api::Watched {
             title_id: title.id,
             episode: ep.episode,
@@ -1916,8 +2539,9 @@ impl App {
         self.client.set_current(&w);
         self.client.add_history(&title, &ep);
         eprintln!(
-            "[PLAY-CAND] yeni mpv başlatılıyor: {} S{:02}E{:02} (kaynak sayısı={})",
-            title.name, ep.season, ep.episode, candidates.len()
+            "[PLAY-CAND] yeni mpv başlatılıyor: {} S{:02}E{:02} (kaynak sayısı={}, plan={})",
+            title.name, ep.season, ep.episode, candidates.len(),
+            plan.as_ref().map(|p| p.source.as_str()).unwrap_or("yok"),
         );
 
         let media_title = format!("{} | S{:02}E{:02}", title.name, ep.season, ep.episode);
@@ -1935,28 +2559,51 @@ impl App {
 
         let auto_fullscreen = self.settings.borrow().auto_fullscreen;
         let upscale = self.settings.borrow().upscale.clone();
-        let aniskip_enabled = self.settings.borrow().aniskip_enabled;
-        let aniskip_shared = std::sync::Arc::new(std::sync::Mutex::new(api::AniSkipTimes::default()));
+        let show_intro_hint = self.settings.borrow().show_intro_hint;
+        let show_music_hint = self.settings.borrow().show_music_hint;
+        let skip_times = plan.as_ref().map(|p| p.times.clone()).unwrap_or_default();
+        let skip_shared = std::sync::Arc::new(std::sync::Mutex::new(skip_times));
 
-        let skip_cmd = if aniskip_enabled {
-            "s show-text \"⏳ AniSkip çözümleniyor…\" 2000\n".to_string()
-        } else {
-            "s show-text \"AniSkip kapalı (Ayarlar)\" 2000\n".to_string()
+        // Conf video açılmadan hazır yazılır (gerçek tuşlar veya dürüst durum).
+        let input_conf_path = format!("/tmp/animecix-input-{tid}-{season}-{episode}.conf");
+        let mut input_conf_content = match &plan {
+            Some(p) => crate::skip::input_conf(&p.times, &p.source),
+            None => crate::skip::input_conf(&api::SkipTimes::default(), ""),
         };
-        let outro_cmd = if aniskip_enabled {
-            "e show-text \"⏳ AniSkip çözümleniyor…\" 2000\n".to_string()
-        } else {
-            "e show-text \"AniSkip kapalı (Ayarlar)\" 2000\n".to_string()
-        };
-
-        let input_conf_path = format!("/tmp/animecix-input-{tid}.conf");
-        let input_conf_content = format!(
-            "{skip_cmd}\
-             {outro_cmd}\
-             S seek -30; show-text \"⏪ 30s Geri\" 2000\n\
-             End ignore\n"
-        );
+        let song_url = plan.as_ref().and_then(|p| p.song_url.clone());
+        if let Some(url) = &song_url {
+            input_conf_content.push_str(&crate::music::music_keybind_line(url));
+        }
         let _ = std::fs::write(&input_conf_path, input_conf_content);
+
+        // Kalıcı sağ-üst şarkı katmanı (ASS). Şarkı yoksa dosya yazılmaz.
+        let ass_path = match &plan {
+            Some(p) => {
+                let op = match (p.times.op_start, p.times.op_end, &p.music_op) {
+                    (Some(f), Some(t), Some(line)) => Some((f, t, line.as_str())),
+                    _ => None,
+                };
+                let ed = match (p.times.ed_start, p.times.ed_end, &p.music_ed) {
+                    (Some(f), Some(t), Some(line)) => Some((f, t, line.as_str())),
+                    _ => None,
+                };
+                let show_hint = show_music_hint && song_url.is_some();
+                let ass = crate::music::music_ass(op, ed, crate::font::FONT_STYLE, show_hint);
+                if ass.is_empty() {
+                    None
+                } else {
+                    let path = format!("/tmp/animecix-music-{tid}-{season}-{episode}.ass");
+                    match std::fs::write(&path, ass) {
+                        Ok(()) => Some(path),
+                        Err(e) => {
+                            eprintln!("[PLAY-CAND] ass yazılamadı: {e}");
+                            None
+                        }
+                    }
+                }
+            }
+            None => None,
+        };
 
         let progress = self.progress.clone();
         let progress_bars = self.progress_bars.clone();
@@ -1967,7 +2614,8 @@ impl App {
             old.dismiss();
         }
         let t = adw::Toast::new(&format!(
-            "▶ {media_title} açılıyor…{}",
+            "▶ {} açılıyor…{}",
+            glib::markup_escape_text(&media_title),
             saved_pos.map(|p| {
                 let s = p as u64;
                 if s >= 3600 { format!(" ({}:{:02}:{:02}'den)", s/3600, (s%3600)/60, s%60) }
@@ -2035,51 +2683,34 @@ impl App {
             });
         }
 
-        if aniskip_enabled {
-            let alive_r = alive.clone();
-            let client_r = client.clone();
-            let name_r = title.name.clone();
-            let shared_r = aniskip_shared.clone();
-            let sock_r = sock_path.clone();
-            let conf_r = input_conf_path.clone();
-            let toast_tx_r = toast_tx.clone();
-            std::thread::spawn(move || {
-                const MAX_TRIES: u32 = 5;
-                for attempt in 0..MAX_TRIES {
-                    if !alive_r.load(std::sync::atomic::Ordering::Relaxed) { return; }
-                    let t = client_r.fetch_aniskip_timestamps(&name_r, episode);
-                    if t.op_end.is_some() || t.ed_end.is_some() {
-                        *shared_r.lock().unwrap() = t;
-                        let t2 = shared_r.lock().unwrap().clone();
-                        let _ = std::fs::write(&conf_r, aniskip_input_conf(&t2));
-                        if std::path::Path::new(&sock_r).exists() {
-                            if let Some(et) = t2.op_end {
-                                crate::player::send_mpv_cmd(&sock_r, &format!("{{\"command\":[\"keybind\",\"s\",\"seek {et:.1} absolute\"]}}\n"));
-                            }
-                            if let Some(et) = t2.ed_end {
-                                crate::player::send_mpv_cmd(&sock_r, &format!("{{\"command\":[\"keybind\",\"e\",\"seek {et:.1} absolute\"]}}\n"));
-                            }
-                        }
-                        let _ = toast_tx_r.send("⏩ AniSkip hazır ('s' ile intro atlarsın)".to_string());
-                        return;
-                    }
-                    if attempt + 1 < MAX_TRIES {
-                        std::thread::sleep(std::time::Duration::from_secs(45));
-                    }
+        // Plan bildirimleri (GTK): hazır + şarkılar, ya da dürüst yokluk.
+        match &plan {
+            Some(p) => {
+                let t = adw::Toast::new(&format!(
+                    "⏩ Atlama hazır ({} · 's' intro, 'e' outro)",
+                    glib::markup_escape_text(&p.source)
+                ));
+                t.set_timeout(3);
+                self.toast.add_toast(t);
+                for m in [&p.music_op, &p.music_ed].into_iter().flatten() {
+                    let tm = adw::Toast::new(&glib::markup_escape_text(m));
+                    tm.set_timeout(4);
+                    self.toast.add_toast(tm);
                 }
-                if std::path::Path::new(&sock_r).exists() {
-                    crate::player::send_mpv_cmd(&sock_r, "{\"command\":[\"keybind\",\"s\",\"show-text \\\"⚠️ İntro zamanı bulunamadı (AniSkip)\\\" 2500\"]}\n");
-                    crate::player::send_mpv_cmd(&sock_r, "{\"command\":[\"keybind\",\"e\",\"show-text \\\"⚠️ Outro zamanı bulunamadı (AniSkip)\\\" 2500\"]}\n");
-                }
-                let _ = toast_tx_r.send("⚠️ AniSkip: intro/outro zamanları bulunamadı".to_string());
-            });
+            }
+            None => {
+                let t = adw::Toast::new("⚠️ İntro/outro zamanları bulunamadı");
+                t.set_timeout(3);
+                self.toast.add_toast(t);
+            }
         }
 
         {
             let alive = alive.clone();
             let sock_poll = sock_path.clone();
             let sock_c = sock_path.clone();
-            let aniskip_c = aniskip_shared.clone();
+            let skip_c = skip_shared.clone();
+            let show_intro_hint_c = show_intro_hint;
             let client_c = client.clone();
             let current_shared_c = current_shared.clone();
             let (sender, receiver) = std::sync::mpsc::channel::<(f64, f64)>();
@@ -2096,18 +2727,26 @@ impl App {
 
                 loop {
                     if std::path::Path::new(&sock_c).exists() {
-                        let snap = aniskip_c.lock().unwrap().clone();
+                        let snap = skip_c.lock().unwrap().clone();
                         let (pos, dur) = crate::player::query_mpv_position(&sock_c).unwrap_or((0.0, 0.0));
-                        if let Some(st) = snap.op_start {
-                            if !op_prompted && pos >= (st - 1.5) && pos <= (st + 25.0) {
+                        if show_intro_hint_c {
+                            if let Some(st) = snap.op_start {
+                                if !op_prompted && pos >= (st - 1.5) && pos <= (st + 25.0) {
                                 op_prompted = true;
-                                crate::player::send_mpv_cmd(&sock_c, "{\"command\":[\"show-text\", \"⏩ İntro Başladı ('s' ile atlayabilirsiniz)\", 7000]}\n");
+                                let msg = crate::skip::prompt_op(None);
+                                for cmd in crate::skip::skip_osd_cmds(&msg, 4000) {
+                                    crate::player::send_mpv_cmd_retry(&sock_c, &cmd, 2);
+                                }
+                                }
                             }
-                        }
-                        if let Some(st) = snap.ed_start {
-                            if !ed_prompted && pos >= (st - 1.5) && pos <= (st + 25.0) {
+                            if let Some(st) = snap.ed_start {
+                                if !ed_prompted && pos >= (st - 1.5) && pos <= (st + 25.0) {
                                 ed_prompted = true;
-                                crate::player::send_mpv_cmd(&sock_c, "{\"command\":[\"show-text\", \"🏁 Outro Başladı\", 7000]}\n");
+                                let msg = crate::skip::prompt_ed(None);
+                                for cmd in crate::skip::skip_osd_cmds(&msg, 4000) {
+                                    crate::player::send_mpv_cmd_retry(&sock_c, &cmd, 2);
+                                }
+                                }
                             }
                         }
                         if sender.send((pos, dur)).is_err() { break; }
@@ -2185,6 +2824,7 @@ impl App {
             let saved_pos_c = saved_pos;
             let auto_fullscreen_c = auto_fullscreen;
             let upscale_c = upscale;
+            let ass_path_c = ass_path.clone();
             let mpv_child_c = mpv_child.clone();
             let mut candidates: Vec<String> = candidates.to_vec();
             let fallback_embeds_c = fallback_embeds.to_vec();
@@ -2223,7 +2863,18 @@ impl App {
                         .arg("--keep-open=yes")
                         .arg(format!("--input-ipc-server={sock_path_c}"));
                     if auto_fullscreen_c { cmd.arg("--fullscreen"); }
+                    // Atlama OSD'si alt-solda (şarkı ASS'i sağ-üstte; üst-üste binmez).
+                    cmd.arg("--osd-align-x=left")
+                        .arg("--osd-align-y=bottom")
+                        .arg("--osd-margin-x=30")
+                        .arg("--osd-margin-y=30");
                     cmd.arg(format!("--input-conf={input_conf_path_c}"));
+                    if let Some(ass) = ass_path_c.as_deref() {
+                        cmd.arg(format!("--sub-file={ass}"));
+                    }
+                    if let Some(fdir) = crate::font::ensure_fonts() {
+                        cmd.args(crate::font::mpv_font_args(&fdir));
+                    }
                     cmd.args(saved_pos_c.map(|p| format!("--start={p:.1}")).as_slice())
                         .arg("--cache=yes")
                         .arg("--demuxer-max-bytes=128MiB")
@@ -2380,7 +3031,7 @@ impl App {
 
     fn show_error(&self, msg: &str) {
         eprintln!("animecix hatası: {msg}");
-        let t = adw::Toast::new(&format!("Hata: {msg}"));
+        let t = adw::Toast::new(&format!("Hata: {}", glib::markup_escape_text(msg)));
         t.set_timeout(4);
         self.toast.add_toast(t);
     }
@@ -2418,6 +3069,13 @@ mod decide_retry_tests {
         assert!(!playing);
     }
 
+    #[test]
+    fn toast_text_escapes_markup_breakers() {
+        // Rose&Night vakası: ham & bildirimi sessizce öldürüyordu.
+        let esc = glib::markup_escape_text("Rose&Night Subs");
+        assert!(esc.contains("&amp;"), "ham & kaçırılmalı: {esc}");
+        assert!(!esc.contains(" & "), "çıplak & kalmamalı");
+    }
 
     #[test]
     fn slow_source_within_window_is_not_killed() {

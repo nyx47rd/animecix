@@ -57,3 +57,16 @@ pub fn send_mpv_cmd(sock: &str, json_cmd: &str) -> bool {
     stream.set_write_timeout(Some(Duration::from_millis(400))).ok();
     stream.write_all(json_cmd.as_bytes()).is_ok()
 }
+
+/// Komutu birkaç kez dener; sonunda da olmazsa stderr'e yazar.
+/// Soket yarışlarında sessiz kayıpları bitirir.
+pub fn send_mpv_cmd_retry(sock: &str, json_cmd: &str, tries: u32) -> bool {
+    for _ in 0..tries.max(1) {
+        if send_mpv_cmd(sock, json_cmd) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(700));
+    }
+    eprintln!("[MPV-IPC] komut iletilemedi ({} deneme): {}", tries.max(1), json_cmd.trim());
+    false
+}

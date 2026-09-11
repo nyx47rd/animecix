@@ -1,4 +1,4 @@
-use std::sync::{Arc, mpsc, atomic::{AtomicU8, Ordering}};
+use std::sync::{Arc, mpsc, Mutex, atomic::{AtomicU8, Ordering}};
 use std::time::Duration;
 
 enum Method {
@@ -30,6 +30,9 @@ struct Inner {
     fallback: Option<wreq::Client>,
     tx: mpsc::Sender<Job>,
     last_good: AtomicU8,
+    /// Kullanıcının tarayıcıdan aldığı cf_clearance bileti. Boşsa takılmaz.
+    /// Değer ASLA log'a yazılmaz.
+    cf_clearance: Mutex<String>,
 }
 
 #[derive(Clone)]
@@ -123,7 +126,7 @@ impl ReqB<'_> {
     }
 }
 
-fn exec_on(rt: &tokio::runtime::Runtime, client: &wreq::Client, spec: &Spec) -> Result<RawResp, String> {
+fn exec_on(rt: &tokio::runtime::Runtime, client: &wreq::Client, spec: &Spec, clearance: &str) -> Result<RawResp, String> {
     let mut url = spec.url.clone();
     if let Some(q) = &spec.query {
         if !q.is_empty() {
@@ -142,6 +145,12 @@ fn exec_on(rt: &tokio::runtime::Runtime, client: &wreq::Client, spec: &Spec) -> 
     };
     for (k, v) in &spec.headers {
         rb = rb.header(k, v);
+    }
+    for (k, v) in browser_headers_for(&url, &spec.headers) {
+        rb = rb.header(&k, &v);
+    }
+    if let Some(c) = cookie_header_for(&url, &spec.headers, clearance) {
+        rb = rb.header("Cookie", &c);
     }
     if let Some(j) = &spec.json_body {
         let body = serde_json::to_vec(j).map_err(|e| e.to_string())?;
@@ -173,7 +182,8 @@ fn exec_cascade(rt: &tokio::runtime::Runtime, inner: &Inner, spec: &Spec) -> Res
 
     let mut last: Option<Result<RawResp, String>> = None;
     for (idx, client) in order.iter().take(if inner.fallback.is_some() { 2 } else { 1 }) {
-        let res = exec_on(rt, client, &spec);
+        let clearance = inner.cf_clearance.lock().map(|g| g.clone()).unwrap_or_default();
+        let res = exec_on(rt, client, &spec, &clearance);
         match &res {
             Ok(r) if r.status != 403 => {
                 inner.last_good.store(*idx, Ordering::Relaxed);
@@ -237,8 +247,20 @@ impl Http {
                 fallback: rt_fallback,
                 tx,
                 last_good: AtomicU8::new(0),
+                cf_clearance: Mutex::new(String::new()),
             }),
         })
+    }
+
+    /// Cloudflare biletini kaydeder (boş string temizler). Log'a yazılmaz.
+    pub fn set_cf_clearance(&self, v: &str) {
+        let v = v.trim();
+        if v.len() > 4096 {
+            return;
+        }
+        if let Ok(mut g) = self.inner.cf_clearance.lock() {
+            *g = v.to_string();
+        }
     }
 
     pub fn get(&self, url: impl Into<String>) -> ReqB<'_> {
@@ -281,5 +303,117 @@ impl Http {
                 timeout_secs: None,
             },
         }
+    }
+}
+
+/// animecix.tv'ye giden API isteklerine tarayıcı başlık seti üretir.
+/// Video-host'larına (sibnet/tau/streamtape) dokunulmaz: onların kendi
+/// referer/koruma mantığı var. Çağrı noktasında verilen başlıklar korunur.
+///
+/// NOT: UA + Sec-CH-UA* taklit katmanına aittir (tutarlı sürüm için);
+/// buraya eklenmez. Origin de eklenmez (gerçek same-origin GET fetch'i
+/// Origin göndermez). Sadece fetch-bağlamı + dil + referer verilir.
+fn browser_headers_for(url: &str, existing: &[(String, String)]) -> Vec<(String, String)> {
+    const DEFAULTS: [(&str, &str); 5] = [
+        ("Referer", "https://animecix.tv/"),
+        ("Accept-Language", "tr-TR,tr;q=0.9,en;q=0.8"),
+        ("Sec-Fetch-Dest", "empty"),
+        ("Sec-Fetch-Mode", "cors"),
+        ("Sec-Fetch-Site", "same-origin"),
+    ];
+    let host = url
+        .split("//")
+        .nth(1)
+        .unwrap_or("")
+        .split('/')
+        .next()
+        .unwrap_or("");
+    if host != "animecix.tv" {
+        return Vec::new();
+    }
+    DEFAULTS
+        .iter()
+        .filter(|(k, _)| {
+            !existing
+                .iter()
+                .any(|(ek, _)| ek.eq_ignore_ascii_case(k))
+        })
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+/// animecix.tv isteklerine takılacak Cookie başlığının değerini üretir.
+/// Boş bilet, video-host'ları ve çağrıda zaten Cookie varsa None döner.
+fn cookie_header_for(
+    url: &str,
+    existing: &[(String, String)],
+    clearance: &str,
+) -> Option<String> {
+    if clearance.is_empty() {
+        return None;
+    }
+    let host = url
+        .split("//")
+        .nth(1)
+        .unwrap_or("")
+        .split('/')
+        .next()
+        .unwrap_or("");
+    if host != "animecix.tv" {
+        return None;
+    }
+    if existing
+        .iter()
+        .any(|(ek, _)| ek.eq_ignore_ascii_case("cookie"))
+    {
+        return None;
+    }
+    Some(format!("cf_clearance={clearance}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{browser_headers_for, cookie_header_for};
+
+    #[test]
+    fn animecix_api_gets_browser_headers() {
+        let h = browser_headers_for("https://animecix.tv/secure/search/frieren", &[]);
+        let get = |k: &str| h.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.clone());
+        assert_eq!(get("Referer").as_deref(), Some("https://animecix.tv/"));
+        assert_eq!(get("Sec-Fetch-Site").as_deref(), Some("same-origin"));
+        assert_eq!(get("Sec-Fetch-Mode").as_deref(), Some("cors"));
+        assert!(get("Sec-CH-UA").is_none(), "UA ipuçları taklite ait");
+        assert!(get("Origin").is_none(), "GET fetch Origin taşımaz");
+        assert_eq!(h.len(), 5);
+    }
+
+    #[test]
+    fn explicit_headers_win() {
+        let existing = vec![("Referer".to_string(), "https://ornek/".to_string())];
+        let h = browser_headers_for("https://animecix.tv/secure/search/x", &existing);
+        assert_eq!(h.len(), 4);
+        assert!(h.iter().all(|(k, _)| k != "Referer"));
+    }
+
+    #[test]
+    fn video_hosts_untouched() {
+        for u in [
+            "https://video.sibnet.ru/shell.php?videoid=1",
+            "https://tau-video.xyz/api/video/abc",
+            "https://streamtape.com/e/xyz",
+        ] {
+            assert!(browser_headers_for(u, &[]).is_empty(), "{u} bozulmamalı");
+        }
+    }
+
+    #[test]
+    fn clearance_cookie_attached_to_api_only() {
+        let v = cookie_header_for("https://animecix.tv/secure/search/x", &[], "BILET123");
+        assert_eq!(v.as_deref(), Some("cf_clearance=BILET123"));
+        assert!(cookie_header_for("https://animecix.tv/secure/search/x", &[], "").is_none());
+        assert!(cookie_header_for("https://video.sibnet.ru/v/1/2.mp4", &[], "BILET123").is_none());
+        assert!(cookie_header_for("https://tau-video.xyz/api/video/a", &[], "BILET123").is_none());
+        let with_cookie = vec![("Cookie".to_string(), "a=b".to_string())];
+        assert!(cookie_header_for("https://animecix.tv/secure/search/x", &with_cookie, "BILET123").is_none());
     }
 }

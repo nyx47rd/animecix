@@ -16,8 +16,8 @@ fn ensure_size_provider(w: i32, h: i32) {
     let css = gtk::CssProvider::new();
     css.load_from_string(&format!(
         ".cover-fixed-{w}-{h} {{ \
-            min-width:{w}px; max-width:{w}px; width:{w}px; \
-            min-height:{h}px; max-height:{h}px; height:{h}px; \
+            min-width:{w}px; max-width:{w}px; \
+            min-height:{h}px; max-height:{h}px; \
         }}"
     ));
 
@@ -60,7 +60,12 @@ pub struct CoverManager {
     waiters: Rc<RefCell<HashMap<String, Vec<gtk::Picture>>>>,
     queue: Arc<Mutex<VecDeque<String>>>,
     active: Rc<Cell<usize>>,
+    /// L1 LRU sırası (önde eski). Negatif (None) girdiler de dahildir.
+    order: Rc<RefCell<VecDeque<String>>>,
 }
+
+/// Çözümlü kapak üst sınırı (~150 adet, 140x210x4 ile <20MB).
+const MAX_L1_COVERS: usize = 150;
 
 impl CoverManager {
     pub fn new(client: Arc<Client>) -> Self {
@@ -70,6 +75,7 @@ impl CoverManager {
             waiters: Rc::new(RefCell::new(HashMap::new())),
             queue: Arc::new(Mutex::new(VecDeque::new())),
             active: Rc::new(Cell::new(0)),
+            order: Rc::new(RefCell::new(VecDeque::new())),
         }
     }
 
@@ -80,6 +86,23 @@ impl CoverManager {
             waiters: self.waiters.clone(),
             queue: self.queue.clone(),
             active: self.active.clone(),
+            order: self.order.clone(),
+        }
+    }
+
+    /// LRU dokunuşu: anahtarı sona al, taşanı at.
+    fn lru_touch(&self, key: &str) {
+        let mut order = self.order.borrow_mut();
+        if let Some(pos) = order.iter().position(|k| k == key) {
+            order.remove(pos);
+        }
+        order.push_back(key.to_string());
+        while order.len() > MAX_L1_COVERS {
+            if let Some(old) = order.pop_front() {
+                self.cache.borrow_mut().remove(&old);
+            } else {
+                break;
+            }
         }
     }
 
@@ -103,7 +126,9 @@ impl CoverManager {
         let key = format!("{url}@{w}x{h}");
 
         if let Some(Some(t)) = self.cache.borrow().get(&key) {
-            pic.set_paintable(Some(t));
+            let t = t.clone();
+            self.lru_touch(&key);
+            pic.set_paintable(Some(&t));
             return;
         }
         if let Some(None) = self.cache.borrow().get(&key) {
@@ -168,10 +193,6 @@ impl CoverManager {
 
         if let Some(b) = &bytes {
             let mut cache = self.cache.borrow_mut();
-            if cache.len() > 40 {
-                cache.clear();
-            }
-
             for (key, pics) in waiters.iter() {
                 let Some(rest) = key.strip_prefix(url) else { continue };
                 let Some(rest) = rest.strip_prefix('@') else { continue };
@@ -187,6 +208,10 @@ impl CoverManager {
                 }
                 keys_to_remove.push(key.clone());
             }
+            drop(cache);
+            for k in &keys_to_remove {
+                self.lru_touch(k);
+            }
         } else {
             let mut cache = self.cache.borrow_mut();
             for (key, _) in waiters.iter() {
@@ -194,6 +219,10 @@ impl CoverManager {
                     cache.insert(key.clone(), None);
                     keys_to_remove.push(key.clone());
                 }
+            }
+            drop(cache);
+            for k in &keys_to_remove {
+                self.lru_touch(k);
             }
         }
 

@@ -32,6 +32,31 @@ pub struct Client {
     resolved: std::sync::Mutex<HashMap<String, (u64, String)>>,
     cache_dir: PathBuf,
     translators: std::sync::Mutex<HashMap<i64, TranslatorMeta>>,
+    /// slug → (zaman, plan verisi). Bellek-içi, TTL 6sa.
+    skip_plans: std::sync::Mutex<HashMap<String, (u64, CachedSkip)>>,
+    /// Kasa sırrı önbelleği (zaman, sır). TTL 1sa; el girdisi bypass eder.
+    vault: std::sync::Mutex<(u64, String)>,
+}
+
+/// Önbelleğe giren plan verisi (ömür bağımsız, serileşebilir şekil).
+#[derive(Clone, Debug, Default)]
+pub struct CachedSkip {
+    pub times: SkipTimes,
+    pub music_op: Option<String>,
+    pub music_ed: Option<String>,
+    pub song_url: Option<String>,
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// most-sought hata türü: ağ-hatası ile boş-DB'yi çağıran ayırt eder.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FetchSkipError {
+    NoSecret,
+    NoMeta,
+    Network(String),
 }
 
 #[derive(Clone, Debug)]
@@ -42,8 +67,8 @@ pub struct TranslatorMeta {
     pub url: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct AniSkipTimes {
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct SkipTimes {
     pub op_start: Option<f64>,
     pub op_end: Option<f64>,
     pub ed_start: Option<f64>,
@@ -289,6 +314,8 @@ pub struct State {
     #[serde(default)]
     pub right_click_tip_seen: bool,
     #[serde(default)]
+    pub tools_tip_seen: bool,
+    #[serde(default)]
     pub marathon: Vec<MarathonItem>,
     #[serde(default)]
     pub preferred_source: HashMap<String, String>,
@@ -304,10 +331,10 @@ pub struct Settings {
     pub quick_search_shortcut: String,
     #[serde(default = "default_search_shortcut")]
     pub search_shortcut: String,
+    #[serde(default = "default_tools_shortcut")]
+    pub tools_shortcut: String,
     #[serde(default = "default_true")]
     pub auto_fullscreen: bool,
-    #[serde(default = "default_true")]
-    pub aniskip_enabled: bool,
     #[serde(default = "default_true")]
     pub auto_update: bool,
     #[serde(default = "default_true")]
@@ -324,15 +351,39 @@ pub struct Settings {
     pub fansub_ask_each_time: bool,
     #[serde(default = "default_ui_scale")]
     pub ui_scale: f32,
+    /// Tarayıcıdan alınan cf_clearance bileti (boşsa takılmaz). Log'a yazılmaz.
+    #[serde(default)]
+    pub cf_clearance: String,
+    /// Resmi oynatıcı intro/outro imzası sırrı (boşsa resmi kaynak denenmez).
+    /// Kullanıcı Ayarlar'a eliyle girer; repoya/harici günlüğe yazılmaz.
+    #[serde(default)]
+    pub official_skip_secret: String,
+    /// Tema kimliği (sabit palet; örn. "koyu", "bordo").
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    /// Şarkı satırında `Shift+M` ipucu gösterilir (varsayılan açık).
+    #[serde(default = "default_true")]
+    pub show_music_hint: bool,
+    /// İntro/outro başlangıç bildirimleri gösterilir (varsayılan açık).
+    #[serde(default = "default_true")]
+    pub show_intro_hint: bool,
+    /// Oynatma öncesi kalite sorulsun (varsayılan kapalı; indirmeden bağımsız).
+    #[serde(default)]
+    pub play_ask_quality: bool,
+    /// İndirme klasörü (boşsa Videolar/Animecix).
+    #[serde(default)]
+    pub download_dir: Option<String>,
 }
 fn default_loading() -> String { "overlay".into() }
 fn default_quick_search() -> bool { true }
 fn default_shortcut() -> String { "/".into() }
 fn default_search_shortcut() -> String { "Ctrl+S".into() }
+fn default_tools_shortcut() -> String { "Ctrl+T".into() }
 fn default_true() -> bool { true }
 fn default_upscale() -> String { "hafif".into() }
 fn default_patience() -> u64 { 20 }
 fn default_ui_scale() -> f32 { 1.0 }
+fn default_theme() -> String { "koyu".into() }
 
 /// Maraton özet kartı için (tamamlanan_sayısı, yüzde) hesaplar.
 /// Girdi: her yapımın 0.0-1.0 arası ilerleme oranı.
@@ -346,6 +397,276 @@ pub fn marathon_summary(fracs: &[f64]) -> (usize, u32) {
         0
     };
     (done, percent.min(100))
+}
+
+/// Sunucu-koruması/kısıt hatası mı? (403/429/5xx → yeniden deneme + yedek yol adayı)
+pub fn is_server_error(e: &str) -> bool {
+    e.contains("HTTP 403") || e.contains("HTTP 429") || e.contains("HTTP 500")
+        || e.contains("HTTP 502") || e.contains("HTTP 503") || e.contains("HTTP 504")
+}
+
+/// tau-video gömülü adresinden (embed_id, vid) çıkarır. tau dışı/kısa id'de None.
+pub fn parse_tau_embed(url: &str) -> Option<(String, String)> {
+    if !url.contains("tau-video.xyz") {
+        return None;
+    }
+    let rest = url.split("/embed/").nth(1)?;
+    let (embed_id, vid) = match rest.split_once("?vid=") {
+        Some((e, v)) => (e.to_string(), v.to_string()),
+        None => (rest.trim_end_matches('?').to_string(), String::new()),
+    };
+    if embed_id.len() >= 24 {
+        Some((embed_id, vid))
+    } else {
+        None
+    }
+}
+
+/// tau-video `/api/video` cevabından oynatma + most-sought malzemesi.
+/// Resmi istemcideki `Video` tipinin bize lazım olan alt kümesi.
+#[derive(Clone, Debug, Default)]
+pub struct TauVideoMeta {
+    /// `_id` → most-sought `tauId` parametresi.
+    pub id: String,
+    pub title_id: String,
+    pub season_number: String,
+    pub episode_number: String,
+    /// Çevirmen/şablon kimliği (örn. slug sonundaki `47`).
+    pub translator: String,
+    pub duration: f64,
+}
+
+impl TauVideoMeta {
+    /// Resmi slug: `{title_id}_{sezon}_{bölüm}_{çevirmen}` (örn. `13463_1_1_47`).
+    pub fn most_sought_slug(&self) -> String {
+        format!(
+            "{}_{}_{}_{}",
+            self.title_id, self.season_number, self.episode_number, self.translator
+        )
+    }
+}
+
+/// `Video` JSON'undan meta çıkarır; kimlik alanları eksikse None döner.
+pub fn parse_tau_video_meta(v: &serde_json::Value) -> Option<TauVideoMeta> {
+    let id = v["_id"].as_str().filter(|s| !s.is_empty())?.to_string();
+    let str_field = |k: &str| -> String {
+        v[k].as_str().map(str::to_string).unwrap_or_else(|| {
+            v[k].as_u64().map(|n| n.to_string()).unwrap_or_default()
+        })
+    };
+    let title_id = str_field("title_id");
+    let translator = str_field("translator");
+    if title_id.is_empty() || translator.is_empty() {
+        return None;
+    }
+    Some(TauVideoMeta {
+        id,
+        title_id,
+        season_number: str_field("season_number"),
+        episode_number: str_field("episode_number"),
+        translator,
+        duration: v["duration"].as_f64().unwrap_or(0.0),
+    })
+}
+
+/// most-sought URL'si kurar (resmi istemcideki `useVideoData` akışı).
+pub fn most_sought_url(slug: &str, tau_id: &str) -> String {
+    format!("{TAU}/api/most-sought/{slug}?tauId={tau_id}")
+}
+
+/// `x-player-sig` imzası: HMAC-SHA256(secret, slug), hex kodlu.
+/// Secret resmi ekipten alınır; boş secret ile çağrılmaz (çağıran korur).
+pub fn sign_most_sought_slug(secret: &str, slug: &str) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC her anahtarı kabul eder");
+    mac.update(slug.as_bytes());
+    mac.finalize()
+        .into_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Resmi intro sırrı kasası: sunucudaki şifreli blob'un adresi.
+/// Blob herkese açıktır ama şifrelidir: {"v":1,"nonce":"<24 hex>","ct":"<hex>"}.
+pub const SKIP_VAULT_URL: &str =
+    "https://raw.githubusercontent.com/nyx47rd/animecix/main/docs/skip-vault.json";
+
+/// Derleme anında gömülen kasa anahtarı (ANIMECIX_VAULT_KEY, 64 hex).
+/// Tanımlı değilse kasa kapalıdır; el girdisi yine çalışır.
+fn vault_key_hex() -> Option<String> {
+    option_env!("ANIMECIX_VAULT_KEY").map(str::to_string)
+}
+
+/// Testler/yerel prova için çalışma anı geçersiz kılma (yoksa sabit URL).
+fn vault_url() -> String {
+    std::env::var("ANIMECIX_VAULT_URL").unwrap_or_else(|_| SKIP_VAULT_URL.to_string())
+}
+
+fn hex_decode(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 || s.is_empty() {
+        return None;
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+        .collect()
+}
+
+/// Kasa blob'unu çözer (AES-256-GCM). Bozuk girdi/yanlış anahtarda None;
+/// sır hiçbir koşulda log'a yazılmaz.
+pub fn decrypt_vault_secret(key_hex: &str, vault_json: &serde_json::Value) -> Option<String> {
+    use aes_gcm::{Aes256Gcm, Key, Nonce};
+    use aes_gcm::aead::{Aead, KeyInit};
+    let key_bytes = hex_decode(key_hex)?;
+    if key_bytes.len() != 32 {
+        return None;
+    }
+    let nonce_bytes = hex_decode(vault_json["nonce"].as_str()?)?;
+    if nonce_bytes.len() != 12 {
+        return None;
+    }
+    let ct = hex_decode(vault_json["ct"].as_str()?)?;
+    if ct.is_empty() {
+        return None;
+    }
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
+    let pt = cipher
+        .decrypt(Nonce::from_slice(&nonce_bytes), ct.as_ref())
+        .ok()?;
+    String::from_utf8(pt).ok().filter(|s| !s.is_empty())
+}
+
+/// Resmi intro/outro aralığı (saniye).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SkipSegment {
+    pub from: f64,
+    pub to: f64,
+}
+
+/// Resmi `MusicData` karşılığı (açılış/kapanış şarkısı).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MusicData {
+    pub title: String,
+    pub artist: String,
+    pub spotify_url: Option<String>,
+    pub apple_music_url: Option<String>,
+    pub song_link: Option<String>,
+}
+
+/// Resmi `SkipMeta` karşılığı: intro/outro + şarkı bilgileri.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SkipMeta {
+    pub intro: Option<SkipSegment>,
+    pub outro: Option<SkipSegment>,
+    pub music: Option<MusicData>,
+    pub outro_music: Option<MusicData>,
+}
+
+/// Sağlıklı atlama aralığı: negatif yok, bitiş > başlangıç, süre ≥5sn, ≤24sa.
+/// Resmi veriye uygulanır (bozuk sunucu verisini eler).
+pub fn sane_range(from: f64, to: f64) -> bool {
+    from >= 0.0 && to > from && to - from >= 5.0 && to <= 86_400.0
+}
+
+fn parse_skip_segment(v: &serde_json::Value) -> Option<SkipSegment> {
+    Some(SkipSegment {
+        from: v["from"].as_f64()?,
+        to: v["to"].as_f64()?,
+    })
+}
+
+fn parse_music_data(v: &serde_json::Value) -> Option<MusicData> {
+    if !v.is_object() {
+        return None;
+    }
+    let title = v["title"].as_str().unwrap_or("").to_string();
+    let artist = v["artist"].as_str().unwrap_or("").to_string();
+    if title.is_empty() && artist.is_empty() {
+        return None;
+    }
+    let opt = |k: &str| v[k].as_str().map(str::to_string);
+    Some(MusicData {
+        title,
+        artist,
+        spotify_url: opt("spotify_url"),
+        apple_music_url: opt("apple_music_url"),
+        song_link: opt("song_link"),
+    })
+}
+
+/// most-sought JSON'unu ayrıştırır; bilinmeyen/eksik alanlar sessizce atlanır.
+pub fn parse_skip_meta(v: &serde_json::Value) -> SkipMeta {
+    SkipMeta {
+        intro: parse_skip_segment(&v["intro"]),
+        outro: parse_skip_segment(&v["outro"]),
+        music: parse_music_data(&v["music"]),
+        outro_music: parse_music_data(&v["outro_music"]),
+    }
+}
+
+impl SkipMeta {
+    /// Akıl sağlığı filtresi: ters (8→4), negatif, 5 sn'den kısa veya
+    /// 24 saatten uzun aralıkları eler. Çift (başlangıç+bitiş) atomik düşer.
+    pub fn sanitized_times(&self) -> SkipTimes {
+        let sane = |s: Option<&SkipSegment>| -> (Option<f64>, Option<f64>) {
+            match s {
+                Some(seg) if sane_range(seg.from, seg.to) => {
+                    (Some(seg.from), Some(seg.to))
+                }
+                _ => (None, None),
+            }
+        };
+        let (op_start, op_end) = sane(self.intro.as_ref());
+        let (ed_start, ed_end) = sane(self.outro.as_ref());
+        SkipTimes { op_start, op_end, ed_start, ed_end }
+    }
+
+    /// Şarkı bilgi satırı (toast/OSD). Şarkı yoksa None döner.
+    pub fn music_line(&self) -> Option<String> {
+        let m = self.music.as_ref()?;
+        let mut line = format!("🎵 Açılış: {} — {}", m.title, m.artist);
+        if m.spotify_url.is_some() || m.apple_music_url.is_some() {
+            line.push_str(" ▶");
+        }
+        Some(line)
+    }
+
+    /// Kapanış şarkısı bilgi satırı. Yoksa None döner.
+    pub fn outro_music_line(&self) -> Option<String> {
+        let m = self.outro_music.as_ref()?;
+        Some(format!("🎵 Kapanış: {} — {}", m.title, m.artist))
+    }
+}
+
+/// Ham oynatma hatasını kullanıcı diline çevirir. Bilinmeyen metin aynen geçer.
+pub fn friendly_play_error(e: &str) -> String {
+    if e.starts_with("HTTP 403") {
+        return "Sunucu koruması isteği kesti (403). Birazdan tekrar dene.".to_string();
+    }
+    if e.starts_with("HTTP 429") {
+        return "Çok fazla istek gönderildi (429). Biraz bekleyip tekrar dene.".to_string();
+    }
+    if e.starts_with("HTTP 5") {
+        return format!("Sunucu hatası ({e}). Birazdan tekrar dene.");
+    }
+    if e.contains("SendRequest") || e.contains("error sending request") {
+        return "Bağlantı kurulamadı (ağ veya koruma kesti). İnternetini kontrol edip tekrar dene.".to_string();
+    }
+    e.to_string()
+}
+
+/// Otomatik çeviri geçiş sırası: seçilen önce, kalanlar verildiği sırayla (tekrarsız).
+pub fn fansub_fallback_order(chosen: &FansubInfo, rest: &[FansubInfo]) -> Vec<FansubInfo> {
+    let mut out = vec![chosen.clone()];
+    out.extend(
+        rest.iter()
+            .filter(|f| f.template_id != chosen.template_id)
+            .cloned(),
+    );
+    out
 }
 
 /// Upscale için mpv argümanlarını üretir.
@@ -411,8 +732,8 @@ impl Default for Settings {
             quick_search_enabled: default_quick_search(),
             quick_search_shortcut: default_shortcut(),
             search_shortcut: default_search_shortcut(),
+            tools_shortcut: default_tools_shortcut(),
             auto_fullscreen: default_true(),
-            aniskip_enabled: default_true(),
             auto_update: default_true(),
             notify_uptodate: default_true(),
             upscale: default_upscale(),
@@ -421,6 +742,13 @@ impl Default for Settings {
             default_fansub_template: None,
             fansub_ask_each_time: true,
             ui_scale: default_ui_scale(),
+            cf_clearance: String::new(),
+            official_skip_secret: String::new(),
+            show_music_hint: true,
+            show_intro_hint: true,
+            play_ask_quality: false,
+            theme: default_theme(),
+            download_dir: None,
         }
     }
 }
@@ -509,14 +837,22 @@ impl Client {
             }
         }
 
-        Self {
+        let c = Self {
             http,
             cache: std::sync::Mutex::new(HashMap::new()),
             bytes: std::sync::Mutex::new(HashMap::new()),
             resolved: std::sync::Mutex::new(HashMap::new()),
             cache_dir,
             translators: std::sync::Mutex::new(HashMap::new()),
-        }
+            skip_plans: std::sync::Mutex::new(HashMap::new()),
+            vault: std::sync::Mutex::new((0, String::new())),
+        };
+        c.http.set_cf_clearance(&c.load_settings().cf_clearance);
+        c
+    }
+
+    pub fn set_cf_clearance(&self, v: &str) {
+        self.http.set_cf_clearance(v);
     }
 
     pub fn load_translators(&self) -> Result<(), String> {
@@ -978,15 +1314,8 @@ impl Client {
     }
 
     fn resolve_embed(&self, url: &str) -> Result<String, String> {
-        if url.contains("tau-video.xyz") {
-            let rest = url.split("/embed/").nth(1).unwrap_or("");
-            let (embed_id, vid) = match rest.split_once("?vid=") {
-                Some((e, v)) => (e.to_string(), v.to_string()),
-                None => (rest.trim_end_matches('?').to_string(), String::new()),
-            };
-            if embed_id.len() >= 24 {
-                return self.tau_resolve(&embed_id, &vid);
-            }
+        if let Some((embed_id, vid)) = parse_tau_embed(url) {
+            return self.tau_resolve(&embed_id, &vid);
         }
         if url.contains("sibnet.ru") {
             return self.sibnet_resolve(url);
@@ -1058,6 +1387,16 @@ impl Client {
     }
 
     fn tau_resolve(&self, embed_id: &str, vid: &str) -> Result<String, String> {
+        self.tau_resolve_full(embed_id, vid).map(|(u, _)| u)
+    }
+
+    /// tau çözümleme + video metası (most-sought malzemesi).
+    /// Meta çıkarılamazsa URL yine döner, meta None olur.
+    fn tau_resolve_full(
+        &self,
+        embed_id: &str,
+        vid: &str,
+    ) -> Result<(String, Option<TauVideoMeta>), String> {
         let mut url = format!("{TAU}/api/video/{embed_id}");
         if !vid.is_empty() {
             url.push_str(&format!("?vid={vid}"));
@@ -1073,6 +1412,7 @@ impl Client {
             .map_err(|e| format!("tau api: {e}"))?
             .json::<serde_json::Value>()
             .map_err(|e| format!("tau json: {e}"))?;
+        let meta = parse_tau_video_meta(&d);
         let mut best: Option<(String, String)> = None;
         if let Some(urls) = d["urls"].as_array() {
             for u in urls {
@@ -1089,9 +1429,228 @@ impl Client {
             }
         }
         match best {
-            Some((_, u)) => Ok(u),
+            Some((_, u)) => Ok((u, meta)),
             None => Err("tau-video url bulunamadı".to_string()),
         }
+    }
+
+    /// Kalite tercihi → etiket öncelik sırası. "best" hepsinin üst kümesidir.
+    pub fn quality_preference(quality: &str) -> Vec<&'static str> {
+        match quality {
+            "720p" => vec!["720p", "480p"],
+            "480p" => vec!["480p"],
+            _ => vec!["1080p", "720p", "480p"],
+        }
+    }
+
+    /// Etiket listesinden tercihe uyan ilk (etiket, url) çifti. Yoksa ilk girdi.
+    pub fn pick_quality_url(
+        urls: &[(String, String)],
+        prefer: &[&str],
+    ) -> Option<(String, String)> {
+        for p in prefer {
+            if let Some((l, u)) = urls.iter().find(|(l, _)| l == p) {
+                return Some((l.clone(), u.clone()));
+            }
+        }
+        urls.first().cloned()
+    }
+
+    /// Katı seçim: istenen kalite listede yoksa None (sessiz üst-kaliteye düşmez).
+    /// "best" her zaman serbesttir; "720p" 480p'ye inebilir; "480p" yalnızca 480p'dir.
+    pub fn pick_strict(
+        urls: &[(String, String)],
+        quality: &str,
+    ) -> Option<(String, String)> {
+        match quality {
+            "480p" => urls.iter().find(|(l, _)| l == "480p").cloned(),
+            "720p" => urls
+                .iter()
+                .find(|(l, _)| l == "720p" || l == "480p")
+                .cloned(),
+            _ => Self::pick_quality_url(urls, &Self::quality_preference(quality)),
+        }
+    }
+
+    /// Ayna URL'sinden kalite-sınırlı doğrudan video URL'si çözer.
+    /// tau'da tercih uygulanır; diğer hostlarda mevcut tek kalite döner.
+    /// Dönüş SIRASI: (etiket, mp4_url). Etiket boşsa çağıran yedeğe düşer.
+    pub fn resolve_mirror_quality(
+        &self,
+        mirror_url: &str,
+        quality: &str,
+    ) -> Result<(String, String), String> {
+        if let Some((embed_id, vid)) = parse_tau_embed(mirror_url) {
+            let mut url = format!("{TAU}/api/video/{embed_id}");
+            if !vid.is_empty() {
+                url.push_str(&format!("?vid={vid}"));
+            }
+            let d = self
+                .http
+                .get(&url)
+                .header("Accept", "application/json")
+                .timeout(6)
+                .send()
+                .map_err(|e| format!("tau api: {e}"))?
+                .error_for_status()
+                .map_err(|e| format!("tau api: {e}"))?
+                .json::<serde_json::Value>()
+                .map_err(|e| format!("tau json: {e}"))?;
+            let urls: Vec<(String, String)> = d["urls"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|u| {
+                            Some((
+                                u["label"].as_str().unwrap_or("").to_string(),
+                                u["url"].as_str()?.to_string(),
+                            ))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            return Self::pick_quality_url(&urls, &Self::quality_preference(quality))
+                .ok_or_else(|| "tau-video url bulunamadı".to_string());
+        }
+        self.resolve_embed(mirror_url).map(|u| (String::new(), u))
+    }
+
+    /// İndirme için katı çözüm: istenen kalite aynada yoksa Err (sessiz upgrade yok).
+    /// tau dışı hostlarda tek kalite döner (doğrulanamaz, aynen geçer).
+    pub fn resolve_mirror_quality_strict(
+        &self,
+        mirror_url: &str,
+        quality: &str,
+    ) -> Result<(String, String), String> {
+        if parse_tau_embed(mirror_url).is_some() {
+            let (label, url) = self.resolve_mirror_quality(mirror_url, quality)?;
+            let ok = match quality {
+                "480p" => label == "480p",
+                "720p" => label == "720p" || label == "480p",
+                _ => true,
+            };
+            return if ok {
+                Ok((label, url))
+            } else {
+                Err(format!("{quality} bu aynada yok (bulunan: {label})"))
+            };
+        }
+        self.resolve_embed(mirror_url).map(|u| (String::new(), u))
+    }
+
+    /// Oynatılan aynaların gömülü adreslerinden ilk tau metasını çeker.
+    /// best-video ucuna dokunmaz (dalgada 403 yer). Meta yoksa None.
+    pub fn tau_meta_from_embeds(&self, embeds: &[String]) -> Option<TauVideoMeta> {
+        for e in embeds {
+            let (id, vid) = match parse_tau_embed(e) {
+                Some(p) => p,
+                None => continue,
+            };
+            match self.tau_resolve_full(&id, &vid) {
+                Ok((_, meta)) => {
+                    if meta.is_some() {
+                        return meta;
+                    }
+                }
+                Err(e) => eprintln!("[SKIP-RESMI] tau meta: {e}"),
+            }
+        }
+        None
+    }
+
+    /// Kullanılabilir intro sırrını çözer: önce Ayarlar'daki el girdisi,
+    /// yoksa derleme anahtarıyla sunucudaki şifreli kasa (1sa önbellekli).
+    /// Kaynağıyla döner ("manuel"/"kasa"); hiçbiri yoksa None.
+    /// Değer log'a yazılmaz.
+    pub fn resolve_skip_secret(&self, manual: &str) -> Option<(String, &'static str)> {
+        let m = manual.trim();
+        if !m.is_empty() {
+            return Some((m.to_string(), "manuel"));
+        }
+        if let Ok(g) = self.vault.lock() {
+            if !g.1.is_empty() && now_secs().saturating_sub(g.0) < 3600 {
+                return Some((g.1.clone(), "kasa"));
+            }
+        }
+        let key = vault_key_hex()?;
+        let body: serde_json::Value = self
+            .http
+            .get(vault_url())
+            .header("Accept", "application/json")
+            .timeout(5)
+            .send()
+            .ok()?
+            .error_for_status()
+            .ok()?
+            .json()
+            .ok()?;
+        let s = decrypt_vault_secret(&key, &body)?;
+        if let Ok(mut g) = self.vault.lock() {
+            *g = (now_secs(), s.clone());
+        }
+        Some((s, "kasa"))
+    }
+
+    /// slug → önbellek planı (6sa). Dalgalarda tekrar izleme anında açılır.
+    pub fn skip_cache_get(&self, slug: &str) -> Option<CachedSkip> {
+        let map = self.skip_plans.lock().ok()?;
+        let (t, cs) = map.get(slug)?;
+        if now_secs().saturating_sub(*t) < 6 * 3600 {
+            Some(cs.clone())
+        } else {
+            None
+        }
+    }
+
+    pub fn skip_cache_put(&self, slug: &str, cs: &CachedSkip) {
+        if let Ok(mut map) = self.skip_plans.lock() {
+            map.insert(slug.to_string(), (now_secs(), cs.clone()));
+            if map.len() > 200 {
+                map.clear();
+            }
+        }
+    }
+
+    /// Resmi intro/outro + müzik bilgisini çeker (most-sought), 3 denemeli.
+    /// Ok(içi boş) = DB'de yok; Err = ağ-hatası (çağıran ayırt eder).
+    pub fn fetch_official_skip(
+        &self,
+        meta: &TauVideoMeta,
+        secret: &str,
+    ) -> Result<SkipMeta, FetchSkipError> {
+        if secret.is_empty() {
+            return Err(FetchSkipError::NoSecret);
+        }
+        if meta.id.is_empty() {
+            return Err(FetchSkipError::NoMeta);
+        }
+        let slug = meta.most_sought_slug();
+        let sig = sign_most_sought_slug(secret, &slug);
+        let url = most_sought_url(&slug, &meta.id);
+        let mut last_err = String::new();
+        for attempt in 0..3 {
+            let r: Result<serde_json::Value, String> = self
+                .http
+                .get(&url)
+                .header("Accept", "application/json")
+                .header("x-player-sig", &sig)
+                .timeout(5)
+                .send()
+                .map_err(|e| e.to_string())
+                .and_then(|r| r.error_for_status().map_err(|e| e.to_string()))
+                .and_then(|r| r.json().map_err(|e| e.to_string()));
+            match r {
+                Ok(v) => return Ok(parse_skip_meta(&v)),
+                Err(e) => {
+                    last_err = e;
+                    if attempt + 1 < 3 {
+                        std::thread::sleep(std::time::Duration::from_millis(800));
+                    }
+                }
+            }
+        }
+        eprintln!("[SKIP-RESMI] most-sought alınamadı (3 deneme): {last_err}");
+        Err(FetchSkipError::Network(last_err))
     }
 
     fn find_embed(&self, title_id: u64, episode: u64, season: u64) -> Result<(String, String), String> {
@@ -1483,134 +2042,21 @@ impl Client {
         self.resolve_embed(embed_url)
     }
 
-    pub fn resolve_mal_id(&self, anime_name: &str) -> Option<u64> {
-        let mut base = anime_name
-            .replace("(TV)", " ")
-            .replace("Türkçe", " ")
-            .replace("Dublaj", " ")
-            .replace("Altyazılı", " ")
-            .replace("Çizgi Film", " ")
-            .replace("(TV)", " ");
-        if let Some(p) = base.find('(') {
-            if let Some(q) = base.find(')').and_then(|q| if q > p { Some(q) } else { None }) {
-                base.replace_range(p..=q, " ");
-            }
-        }
-        let tokens: Vec<&str> = base
-            .split_whitespace()
-            .filter(|t| {
-                let low = t.to_lowercase();
-                let stem = low.trim_end_matches('.');
-                !(low.contains("sezon")
-                    || low.contains("season")
-                    || low.contains("bölüm")
-                    || stem.chars().all(|c| c.is_ascii_digit())
-                    || matches!(stem, "i" | "ii" | "iii" | "iv" | "v" | "part"))
-            })
-            .collect();
-        let cleaned = tokens.join(" ");
-
-        let mut cands: Vec<String> = Vec::new();
-        if !cleaned.is_empty() {
-            cands.push(cleaned.clone());
-        }
-        let words: Vec<&str> = cleaned.split_whitespace().collect();
-        if words.len() > 2 {
-            let short = words[..2].join(" ");
-            cands.push(short);
-        }
-
-        for cand in &cands {
-            let key = format!("mal_id:{cand}");
-            let cand_c = cand.clone();
-            if let Ok(d) = self.cache_get(&key, 30 * 86400, move |http| {
-                let body = serde_json::json!({
-                    "query": "query ($s: String) { Media (search: $s, type: ANIME) { idMal } }",
-                    "variables": { "s": cand_c }
-                });
-                http.post("https://graphql.anilist.co")
-                    .json(&body)
-                    .timeout(4)
-                    .send()
-                    .map_err(|e| e.to_string())?
-                    .json()
-                    .map_err(|e| e.to_string())
-            }) {
-                if let Some(id) = d["data"]["Media"]["idMal"].as_u64() {
-                    return Some(id);
-                }
-            }
-        }
-        None
+    /// Çeviri listesi alınamadığında yedek: best-video ucundan tek mp4 çözer.
+    /// Bulunamazsa/çözülemezse Err döner (çağıran dürüst hataya çevirir).
+    pub fn resolve_best_video(&self, title_id: u64, episode: u64, season: u64) -> Result<String, String> {
+        self.resolve_best_video_full(title_id, episode, season).map(|(u, _)| u)
     }
 
-    pub fn fetch_aniskip_timestamps(&self, anime_name: &str, ep_num: u64) -> AniSkipTimes {
-        let Some(mal_id) = self.resolve_mal_id(anime_name) else {
-            return AniSkipTimes::default();
-        };
-
-        let key = format!("aniskip_v4:{mal_id}:{ep_num}");
-        let d = match self.cache_get(&key, 6 * 3600, |http| {
-            let endpoints: [(&str, &str); 2] = [
-                ("https://aniskip-mirror-cf.yasar-123-sevda.workers.dev", "cf"),
-                ("https://aniskip-mirror.vercel.app", "vercel"),
-            ];
-            let fetch_one = |http: &crate::http::Http, base: &str| -> Result<serde_json::Value, String> {
-                let url = format!("{base}/v2/skip-times/{mal_id}/{ep_num}?types=op,ed&episodeLength=0");
-                let resp = http.get(url)
-                    .timeout(8)
-                    .send()
-                    .map_err(|e| e.to_string())?;
-                if resp.status() == 404 {
-                    return Ok(serde_json::json!({"found": false, "results": []}));
-                }
-                resp.error_for_status()
-                    .map_err(|e| e.to_string())?
-                    .json()
-                    .map_err(|e| e.to_string())
-            };
-            let mut last_err = String::new();
-            for (base, label) in endpoints {
-                eprintln!("[ANISKIP] denenenen endpoint: {label} ({base})");
-                match fetch_one(http, base) {
-                    Ok(v) => {
-                        eprintln!("[ANISKIP] {label} OK");
-                        return Ok(v);
-                    }
-                    Err(e) => {
-                        eprintln!("[ANISKIP] {label} HATA: {e}, sonraki deneniyor");
-                        last_err = format!("{label}: {e}");
-                    }
-                }
-            }
-            Err(last_err)
-        }) {
-            Ok(val) => val,
-            Err(_) => return AniSkipTimes::default(),
-        };
-
-        let mut res = AniSkipTimes::default();
-        if d["found"].as_bool() == Some(true) {
-            if let Some(results) = d["results"].as_array() {
-                for r in results {
-                    let skip_type = r["skipType"].as_str().unwrap_or("");
-                    let start = r["interval"]["startTime"].as_f64();
-                    let end = r["interval"]["endTime"].as_f64();
-                    if skip_type == "op" {
-                        res.op_start = start;
-                        res.op_end = end;
-                    } else if skip_type == "ed" {
-                        res.ed_start = start;
-                        res.ed_end = end;
-                    }
-                }
-            }
-        }
-        eprintln!(
-            "[ANISKIP] '{}' E{} mal={} op={:?}-{:?} ed={:?}-{:?}",
-            anime_name, ep_num, mal_id, res.op_start, res.op_end, res.ed_start, res.ed_end
-        );
-        res
+    /// best-video + tau meta (most-sought slug malzemesi). Canlı provada kullanılır.
+    pub fn resolve_best_video_full(
+        &self,
+        title_id: u64,
+        episode: u64,
+        season: u64,
+    ) -> Result<(String, Option<TauVideoMeta>), String> {
+        let (embed_id, vid) = self.find_embed(title_id, episode, season)?;
+        self.tau_resolve_full(&embed_id, &vid)
     }
 
     pub fn get_bytes(&self, url: &str) -> Option<Vec<u8>> {
@@ -1924,6 +2370,7 @@ impl Client {
             .get("right_click_tip_seen")
             .and_then(|x| x.as_bool())
             .unwrap_or(false);
+        st.tools_tip_seen = obj.get("tools_tip_seen").and_then(|x| x.as_bool()).unwrap_or(false);
         st
     }
 
@@ -2087,6 +2534,17 @@ impl Client {
         if let Some(list) = st.watched.get_mut(&key) {
             list.retain(|x| !(x.episode == episode && x.season == season));
         }
+        self.save_state(&st);
+    }
+
+    /// Tek bölümün izlendi kaydını + ilerlemesini atomik siler.
+    pub fn clear_episode(&self, title_id: u64, season: u64, episode: u64) {
+        let mut st = self.load_state();
+        let key = title_id.to_string();
+        if let Some(list) = st.watched.get_mut(&key) {
+            list.retain(|x| !(x.episode == episode && x.season == season));
+        }
+        st.progress.remove(&format!("{title_id}:{season}:{episode}"));
         self.save_state(&st);
     }
 
@@ -2410,6 +2868,16 @@ impl Client {
         self.save_state(&st);
     }
 
+    pub fn is_tools_tip_seen(&self) -> bool {
+        self.load_state().tools_tip_seen
+    }
+
+    pub fn set_tools_tip_seen(&self, seen: bool) {
+        let mut st = self.load_state();
+        st.tools_tip_seen = seen;
+        self.save_state(&st);
+    }
+
     pub fn save_progress(&self, tid: u64, season: u64, episode: u64, pos: f64, dur: f64) {
         let key = format!("{tid}:{season}:{episode}");
         let mut st = self.load_state();
@@ -2663,6 +3131,18 @@ mod tests {
     }
 
     #[test]
+    fn tools_tip_seen_survives_migrate() {
+        use_isolated_state();
+        let _g = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let c = Client::new();
+        assert!(!c.is_tools_tip_seen());
+        c.set_tools_tip_seen(true);
+        assert!(c.is_tools_tip_seen(), "bayrak göçte korunmalı");
+        c.set_tools_tip_seen(false);
+        assert!(!c.is_tools_tip_seen());
+    }
+
+    #[test]
     fn marathon_item_serde_roundtrip_keeps_name() {
         let item = MarathonItem {
             title: Title {
@@ -2857,6 +3337,331 @@ mod tests {
     }
 
     #[test]
+    fn settings_cf_clearance_defaults_empty_and_roundtrips() {
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert!(old.cf_clearance.is_empty());
+        let mut s = Settings::default();
+        s.cf_clearance = "BILET123".into();
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.cf_clearance, "BILET123");
+    }
+
+    #[test]
+    fn settings_theme_defaults_dark_and_roundtrips() {
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.theme, "koyu", "eski ayar dosyası koyuya düşmeli");
+        assert!(old.show_music_hint && old.show_intro_hint, "ipucular varsayılan açık");
+        assert!(!old.play_ask_quality, "oynatma kalite sorusu varsayılan kapalı");
+        let mut s = Settings::default();
+        s.theme = "bordo".into();
+        s.show_music_hint = false;
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.theme, "bordo");
+        assert!(!back.show_music_hint);
+        assert!(back.show_intro_hint);
+    }
+
+    #[test]
+    fn settings_skip_secret_defaults_empty_and_roundtrips() {        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert!(old.official_skip_secret.is_empty(), "eski ayar dosyası bozulmamalı");
+        let mut s = Settings::default();
+        assert!(s.official_skip_secret.is_empty());
+        s.official_skip_secret = "SIR".into();
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.official_skip_secret, "SIR");
+    }
+
+    #[test]
+    fn settings_tools_shortcut_defaults_and_roundtrips() {
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.tools_shortcut, "Ctrl+T", "eski ayar dosyası varsayılana düşmeli");
+        let mut s = Settings::default();
+        assert_eq!(s.tools_shortcut, "Ctrl+T");
+        s.tools_shortcut = "Alt+T".into();
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.tools_shortcut, "Alt+T");
+    }
+
+    #[test]
+    fn server_error_classification() {
+        assert!(super::is_server_error("HTTP 403"));
+        assert!(super::is_server_error("tau api: ... HTTP 403 ..."));
+        assert!(super::is_server_error("HTTP 429"));
+        assert!(super::is_server_error("HTTP 503"));
+        assert!(!super::is_server_error("Bölüm videosu çözülemedi"));
+        assert!(!super::is_server_error("error sending request for uri (x): client error (SendRequest)"));
+        assert!(!super::is_server_error(""));
+    }
+
+    #[test]
+    fn pick_strict_never_upgrades_silently() {
+        let only1080 = vec![("1080p".to_string(), "u1080".to_string())];
+        assert_eq!(super::Client::pick_strict(&only1080, "480p"), None);
+        assert_eq!(super::Client::pick_strict(&only1080, "720p"), None);
+        assert!(super::Client::pick_strict(&only1080, "best").is_some());
+        let mixed = vec![
+            ("1080p".to_string(), "u1080".to_string()),
+            ("480p".to_string(), "u480".to_string()),
+        ];
+        assert_eq!(
+            super::Client::pick_strict(&mixed, "720p"),
+            Some(("480p".to_string(), "u480".to_string()))
+        );
+        assert_eq!(
+            super::Client::pick_strict(&mixed, "480p"),
+            Some(("480p".to_string(), "u480".to_string()))
+        );
+    }
+
+    #[test]
+    fn quality_preference_and_pick() {
+        assert_eq!(super::Client::quality_preference("best"), vec!["1080p", "720p", "480p"]);
+        assert_eq!(super::Client::quality_preference("720p"), vec!["720p", "480p"]);
+        assert_eq!(super::Client::quality_preference("480p"), vec!["480p"]);
+        let urls = vec![
+            ("480p".to_string(), "u480".to_string()),
+            ("720p".to_string(), "u720".to_string()),
+            ("1080p".to_string(), "u1080".to_string()),
+        ];
+        assert_eq!(
+            super::Client::pick_quality_url(&urls, &["1080p", "720p", "480p"]),
+            Some(("1080p".to_string(), "u1080".to_string()))
+        );
+        assert_eq!(
+            super::Client::pick_quality_url(&urls, &["720p", "480p"]),
+            Some(("720p".to_string(), "u720".to_string()))
+        );
+        assert_eq!(
+            super::Client::pick_quality_url(&urls, &["480p"]),
+            Some(("480p".to_string(), "u480".to_string()))
+        );
+        let thin = vec![("720p".to_string(), "u720".to_string())];
+        assert_eq!(
+            super::Client::pick_quality_url(&thin, &["1080p", "720p"]),
+            Some(("720p".to_string(), "u720".to_string())),
+            "tercih yoksa ilk girdi"
+        );
+        let empty: Vec<(String, String)> = Vec::new();
+        assert!(super::Client::pick_quality_url(&empty, &["1080p"]).is_none());
+    }
+
+    #[test]
+    fn parse_tau_embed_shapes() {        assert_eq!(
+            super::parse_tau_embed("https://tau-video.xyz/embed/6335c9e6d03cb090cb4c58c1?vid=389615"),
+            Some(("6335c9e6d03cb090cb4c58c1".into(), "389615".into()))
+        );
+        assert_eq!(
+            super::parse_tau_embed("https://tau-video.xyz/embed/6335c9e6d03cb090cb4c58c1"),
+            Some(("6335c9e6d03cb090cb4c58c1".into(), String::new()))
+        );
+        assert!(super::parse_tau_embed("https://video.sibnet.ru/shell.php?videoid=1").is_none(), "tau dışı");
+        assert!(super::parse_tau_embed("https://tau-video.xyz/embed/kisa?vid=1").is_none(), "kısa id");
+        assert!(super::parse_tau_embed("https://tau-video.xyz/izle/123").is_none(), "embed yolu yok");
+    }
+
+    fn sample_video_json() -> serde_json::Value {
+        serde_json::json!({
+            "_id": "6a4d5c73a4f5f9e71074dccf",
+            "title_id": "13463",
+            "season_number": "1",
+            "episode_number": "1",
+            "translator": "47",
+            "duration": 1436.0,
+            "urls": [{"label": "1080p", "url": "https://cdn.example/v.mp4", "size": 1}]
+        })
+    }
+
+    #[test]
+    fn parse_tau_video_meta_ok_and_slug() {
+        let m = super::parse_tau_video_meta(&sample_video_json()).expect("meta çıkmalı");
+        assert_eq!(m.id, "6a4d5c73a4f5f9e71074dccf");
+        assert_eq!(m.most_sought_slug(), "13463_1_1_47");
+        assert_eq!(m.duration, 1436.0);
+    }
+
+    #[test]
+    fn parse_tau_video_meta_missing_identity_none() {
+        assert!(super::parse_tau_video_meta(&serde_json::json!({})).is_none());
+        assert!(super::parse_tau_video_meta(&serde_json::json!({"_id": "x"})).is_none());
+        assert!(super::parse_tau_video_meta(&serde_json::json!({"_id": "x", "title_id": "1"})).is_none());
+    }
+
+    #[test]
+    fn most_sought_url_shape() {
+        assert_eq!(
+            super::most_sought_url("13463_1_1_47", "6a4d5c73a4f5f9e71074dccf"),
+            "https://tau-video.xyz/api/most-sought/13463_1_1_47?tauId=6a4d5c73a4f5f9e71074dccf"
+        );
+    }
+
+    #[test]
+    fn sign_slug_matches_rfc4231_vector() {
+        // RFC 4231 Test 1: key = 0x0b * 20, data = "Hi There".
+        let key = "\u{000b}".repeat(20);
+        assert_eq!(
+            super::sign_most_sought_slug(&key, "Hi There"),
+            "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+        );
+        // Aynı girdi aynı imza, farklı slug farklı imza.
+        let a = super::sign_most_sought_slug("secret", "13463_1_1_47");
+        assert_eq!(a, super::sign_most_sought_slug("secret", "13463_1_1_47"));
+        assert_ne!(a, super::sign_most_sought_slug("secret", "13463_1_2_47"));
+        assert_eq!(a.len(), 64, "hex SHA-256 64 hanedir");
+    }
+
+    #[test]
+    fn parse_skip_meta_real_sample() {
+        // Kullanıcının yakaladığı gerçek cevap (müziksiz bölüm).
+        let v = serde_json::json!({
+            "intro": {"from": 330, "to": 421, "count": 11},
+            "outro": {"from": 1345, "to": 1436, "count": 11}
+        });
+        let m = super::parse_skip_meta(&v);
+        assert_eq!(m.intro, Some(super::SkipSegment { from: 330.0, to: 421.0 }));
+        assert_eq!(m.outro, Some(super::SkipSegment { from: 1345.0, to: 1436.0 }));
+        assert!(m.music.is_none());
+        assert!(m.music_line().is_none());
+        let t = m.sanitized_times();
+        assert_eq!((t.op_start, t.op_end), (Some(330.0), Some(421.0)));
+        assert_eq!((t.ed_start, t.ed_end), (Some(1345.0), Some(1436.0)));
+    }
+
+    #[test]
+    fn parse_skip_meta_with_music() {
+        let v = serde_json::json!({
+            "intro": {"from": 90, "to": 180},
+            "music": {
+                "title": "Kaibutsu",
+                "artist": "YOASOBI",
+                "spotify_url": "https://open.spotify.com/track/x",
+                "apple_music_url": null
+            },
+            "outro_music": {"title": "Yasashii Suisei", "artist": "YOASOBI"}
+        });
+        let m = super::parse_skip_meta(&v);
+        assert!(m.outro.is_none());
+        let line = m.music_line().expect("açılış satırı");
+        assert!(line.contains("Kaibutsu") && line.contains("YOASOBI"), "satır: {line}");
+        assert!(line.contains('▶'), "dinleme bağlantısı işareti: {line}");
+        let ol = m.outro_music_line().expect("kapanış satırı");
+        assert!(ol.contains("Yasashii Suisei"), "satır: {ol}");
+        let t = m.sanitized_times();
+        assert_eq!((t.op_start, t.op_end), (Some(90.0), Some(180.0)));
+        assert!(t.ed_start.is_none() && t.ed_end.is_none());
+    }
+
+    #[test]
+    fn parse_skip_meta_empty_is_default() {
+        let m = super::parse_skip_meta(&serde_json::json!({}));
+        assert_eq!(m, super::SkipMeta::default());
+        assert_eq!(m.sanitized_times(), super::SkipTimes::default());
+    }
+
+    /// SAHTE test anahtarı — gerçek kasa anahtarıyla ilgisi yok.
+    const TEST_VAULT_KEY: &str =
+        "1111111111111111111111111111111111111111111111111111111111111111";
+    const TEST_VAULT_NONCE: &str = "222222222222222222222222";
+
+    fn test_vault_blob(key_hex: &str, plaintext: &str) -> serde_json::Value {
+        use aes_gcm::{Aes256Gcm, Key, Nonce};
+        use aes_gcm::aead::{Aead, KeyInit};
+        let key_bytes = super::hex_decode(key_hex).expect("test anahtarı");
+        let nonce_bytes = super::hex_decode(TEST_VAULT_NONCE).expect("test nonce");
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
+        let ct = cipher
+            .encrypt(Nonce::from_slice(&nonce_bytes), plaintext.as_bytes())
+            .expect("şifreleme");
+        serde_json::json!({
+            "v": 1,
+            "nonce": TEST_VAULT_NONCE,
+            "ct": ct.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+        })
+    }
+
+    #[test]
+    fn decrypt_vault_roundtrip() {
+        let blob = test_vault_blob(TEST_VAULT_KEY, "sahte-sır-123");
+        assert_eq!(
+            super::decrypt_vault_secret(TEST_VAULT_KEY, &blob).as_deref(),
+            Some("sahte-sır-123")
+        );
+    }
+
+    #[test]
+    fn decrypt_vault_rejects_bad_input() {
+        let blob = test_vault_blob(TEST_VAULT_KEY, "sahte-sır-123");
+        let wrong_key = "3333333333333333333333333333333333333333333333333333333333333333";
+        assert!(super::decrypt_vault_secret(wrong_key, &blob).is_none(), "yanlış anahtar");
+        assert!(super::decrypt_vault_secret("kısa", &blob).is_none(), "kısa anahtar");
+        assert!(super::decrypt_vault_secret("zz", &blob).is_none(), "bozuk hex");
+        assert!(super::decrypt_vault_secret(TEST_VAULT_KEY, &serde_json::json!({})).is_none(), "boş blob");
+        let mut tampered = blob.clone();
+        tampered["ct"] = serde_json::json!("00");
+        assert!(super::decrypt_vault_secret(TEST_VAULT_KEY, &tampered).is_none(), "kurcalanmış şifreli metin");
+        let mut empty_ct = blob.clone();
+        empty_ct["ct"] = serde_json::json!("");
+        assert!(super::decrypt_vault_secret(TEST_VAULT_KEY, &empty_ct).is_none(), "boş şifreli metin");
+    }
+
+    #[test]
+    fn sanitized_drops_garbage_keeps_real() {
+        // Canlı vaka: JJK veritabanı intro'yu kabaca, outro'yu ters vermişti.
+        let v = serde_json::json!({"intro": {"from": 63, "to": 147}, "outro": {"from": 8, "to": 4}});
+        let t = super::parse_skip_meta(&v).sanitized_times();
+        assert_eq!((t.op_start, t.op_end), (Some(63.0), Some(147.0)));
+        assert!(t.ed_start.is_none() && t.ed_end.is_none(), "ters aralık elenmeli: {t:?}");
+        // Gerçek sayılar (JJK E1) filtreden geçmeli.
+        let v2 = serde_json::json!({"intro": {"from": 491.709, "to": 581.709}, "outro": {"from": 1435.923, "to": 1492.0}});
+        let t2 = super::parse_skip_meta(&v2).sanitized_times();
+        assert_eq!((t2.op_start, t2.op_end), (Some(491.709), Some(581.709)));
+        assert_eq!((t2.ed_start, t2.ed_end), (Some(1435.923), Some(1492.0)));
+    }
+
+    #[test]
+    fn sanitized_rejects_degenerate() {
+        for (from, to) in [(-5.0, 100.0), (100.0, 100.0), (200.0, 100.0), (0.0, 3.0), (0.0, 100_000.0)] {
+            let v = serde_json::json!({"intro": {"from": from, "to": to}});
+            let t = super::parse_skip_meta(&v).sanitized_times();
+            assert!(t.op_start.is_none() && t.op_end.is_none(), "elenmeli: {from}->{to}");
+        }
+    }
+
+    #[test]
+    fn friendly_errors() {
+        assert!(super::friendly_play_error("HTTP 403").contains("koruması"));
+        assert!(super::friendly_play_error("HTTP 429").contains("429"));
+        assert!(super::friendly_play_error("HTTP 503").contains("Sunucu hatası"));
+        assert!(super::friendly_play_error("error sending request for uri (x): client error (SendRequest)").contains("Bağlantı"));
+        assert_eq!(super::friendly_play_error("Bölüm videosu çözülemedi"), "Bölüm videosu çözülemedi");
+    }
+
+    fn test_fansub(tpl: i64, name: &str) -> super::FansubInfo {
+        super::FansubInfo {
+            template_id: tpl,
+            name: name.into(),
+            rating: 0.0,
+            total_votes: 0,
+            language: "tr".into(),
+            approved_only: true,
+            mirror_count: 0,
+            hosts: Vec::new(),
+            mirrors: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn fansub_fallback_order_chosen_first_no_dupes() {
+        let a = test_fansub(1, "A");
+        let b = test_fansub(2, "B");
+        let c = test_fansub(3, "C");
+        let q = super::fansub_fallback_order(&b, &[a.clone(), b.clone(), c]);
+        let ids: Vec<i64> = q.iter().map(|f| f.template_id).collect();
+        assert_eq!(ids, vec![2, 1, 3]);
+        let q2 = super::fansub_fallback_order(&a, &[]);
+        assert_eq!(q2.len(), 1);
+    }
+
+    #[test]
     fn marathon_summary_math() {
         assert_eq!(super::marathon_summary(&[]), (0, 0), "boş maratonda sıfır");
         assert_eq!(super::marathon_summary(&[1.0, 0.5, 0.0]), (1, 50), "ortalama ve %100 sayımı");
@@ -2893,8 +3698,35 @@ mod tests {
     }
 
     #[test]
-    fn apply_watched_list_fills_progress_count() {
+    fn clear_episode_removes_only_target() {
         use_isolated_state();
+        let _g = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let c = Client::new();
+        let tid: u64 = 999_986;
+        let other: u64 = 999_985;
+
+        c.save_watched(&Watched { title_id: tid, episode: 1, season: 1 }, "");
+        c.save_progress(tid, 1, 1, 95.0, 100.0);
+        c.save_watched(&Watched { title_id: tid, episode: 2, season: 1 }, "");
+        c.save_progress(tid, 1, 2, 50.0, 100.0);
+        c.save_watched(&Watched { title_id: other, episode: 1, season: 1 }, "");
+        c.save_progress(other, 1, 1, 50.0, 100.0);
+
+        c.clear_episode(tid, 1, 1);
+        assert!(!c.is_watched(tid, 1, 1), "hedef watched silinmeli");
+        assert!(c.get_progress(tid, 1, 1).is_none(), "hedef progress silinmeli");
+        assert!(c.is_watched(tid, 1, 2), "komşu bölüm korunmalı");
+        assert!(c.get_progress(tid, 1, 2).is_some(), "komşu konum korunmalı");
+        assert!(c.is_watched(other, 1, 1), "komşu yapım etkilenmemeli");
+        assert!(c.get_progress(other, 1, 1).is_some(), "komşu konum etkilenmemeli");
+        assert_eq!(c.watched_episode_count(tid), 1, "sayaç 1 düşmeli");
+
+        c.mark_title_unwatched(tid);
+        c.mark_title_unwatched(other);
+    }
+
+    #[test]
+    fn apply_watched_list_fills_progress_count() {        use_isolated_state();
         let _g = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let c = Client::new();
         let tid: u64 = 999_988;
@@ -2937,16 +3769,6 @@ mod tests {
             urls.iter().any(|u| u.contains("video.sibnet.ru/v/") && u.ends_with(".mp4")),
             "ep7 sibnet mp4'ü çözümlenmiş olmalı; gelen: {urls:?}"
         );
-    }
-
-    #[test]
-    fn aniskip_live_finds_non_non_biyori_ep9() {
-        let c = Client::new();
-        let t = c.fetch_aniskip_timestamps("Non Non Biyori", 9);
-        eprintln!("[live] NNB E9 aniskip: {t:?}");
-        assert!(t.op_end.is_some(), "ep9 intro (op) zamanları bulunmalı; gelen: {t:?}");
-        assert!(t.ed_start.is_some(), "ep9 outro (ed) zamanları bulunmalı; gelen: {t:?}");
-        assert!(t.op_end.unwrap() < 360.0, "op_end makul olmalı");
     }
 
     #[test]
