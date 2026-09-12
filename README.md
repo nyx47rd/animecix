@@ -18,39 +18,45 @@ kontrol eder ve kendini otomatik güncelleyebilir.
 
 ## Özellikler
 
-- 🏠 **Ana Sayfa**: kategorilere göre anime/dizi/film listeleri
-- 🔎 **Arama**: ana ekranda kısayol tuşu ile hızlı arama; bölüm ekranında hızlı bölüm arama
-- ▶️ **Oynatıcı**: MPV ile oynatma, 2 dakikalık önbellek, otomatik tam ekran, resmi intro/outro atlama
-- ⭐ **Favoriler**: beğendiğin başlıkları koleksiyonuna ekle
-- 🏃 **Maraton**: izleme listesi — sürükle-bırak ile sıralama ve bölüm ilerleme takibi
-- 🕘 **Geçmiş**: izlediğin bölümlerin geçmişi
-- ⚙️ **Ayarlar**: masaüstü başlatıcı entegrasyonu, veri sıfırlama, kısayollar
-- 📦 **Kurulum Sihirbazı**: bağımlılık kontrolü ve masaüstü menüsüne kurulum
-- 🔄 **Otomatik Güncelleme**: AppImage sürümünde başlatmada kendini günceller
-- 🎯 **Akıllı kaynak seçimi**: tüm kaynaklar paralel çözülür, en kalitelisi (dosya boyutuna göre) seçilir;
-  ölü/pasif kaynaklar elenir, açılmayan kaynağa denk gelirse sonraki kaynağa kendiliğinden geçer
-- 🛡️ **VPN proxy desteği** (isteğe bağlı): yerelde çalışan bir proxy varsa
+- **İndirme yöneticisi**: bölüm ve film indirme; 6 bağlantıyla hızlı indirme, kaldığı yerden devam, toplu indirme sihirbazı
+- **Araçlar menüsü**: Favoriler, Maraton, Geçmiş, İndirilenler ve Ayarlar tek menüde; Ctrl+T ile anında erişim (kısayol değiştirilebilir)
+- **5 koyu tema**: Koyu, Bordo, Orman, Lacivert, Mor; karşılama ekranında canlı önizleme
+- **Hızlı arama**: ana ekranda ortalı arama çubuğu (Ctrl+S); bölüm ekranında hızlı bölüm arama
+- **Oynatıcı**: MPV ile oynatma, otomatik tam ekran, resmi intro/outro atlama (S/E), çalan şarkı bilgisi ve Shift+M ile tarayıcıda açma, isteğe bağlı oynatma kalite seçici
+- **Takip**: Favoriler, sürükle-bırak sıralamalı Maraton, izleme Geçmişi, kaldığın yerden devam
+- **Akıllı kaynak seçimi**: kaynaklar paralel çözülür, en kalitelisi seçilir; ölü kaynak elenir, açılmayan kaynakta sonrakine geçilir. manuel kaynak seçimi mevcuttur.
+- **Otomatik güncelleme**: AppImage sürümü başlatmada yeni sürümü denetler, tek tıkla günceller
+- **Kurulum sihirbazı**: bağımlılık kontrolü ve masaüstü başlatıcı kurulumu
+- **Ayarlar**: tema, kısayollar, indirme klasörü, masaüstü başlatıcı, veri sıfırlama
+- **VPN proxy desteği** (isteğe bağlı): yerelde çalışan bir proxy varsa
   (`127.0.0.1:10808`, ör. sing-box + ProtonVPN WireGuard) video trafiğini oradan çıkarır ve
   ISS kısıtlamalarını aşar; proxy kapalıysa uygulama normal çalışır, hiçbir şey bozulmaz
-- ⚡ **Hızlı yükleme**: HTTP/2 multiplexing, bağlantı havuzu (keep-alive) ve DNS önbelleği;
+- **Hızlı yükleme**: HTTP/2 multiplexing, bağlantı havuzu (keep-alive) ve DNS önbelleği;
   kapak görselleri paralel (12 worker) indirilir
 
 ---
 
 ## Ekran Görüntüleri
 
+<p align="center">
+  <img src="screenshots/temalar.png" width="100%">
+  <b>5 koyu tema: Koyu, Bordo, Orman, Lacivert, Mor</b>
+</p>
+
 <div align="center">
 
 | | |
 |:---:|:---:|
 | <img src="screenshots/home.png" width="100%"> | <img src="screenshots/search.png" width="100%"> |
-| **🏠 Ana Sayfa** | **🔎 Arama** |
-| <img src="screenshots/episodes.png" width="100%"> | <img src="screenshots/favorites.png" width="100%"> |
-| **▶️ Bölüm İzleme** | **⭐ Favoriler** |
-| <img src="screenshots/marathon.png" width="100%"> | <img src="screenshots/history.png" width="100%"> |
-| **🏃 İzleme Maratonu** | **🕘 Geçmiş** |
+| **Ana Sayfa** | **Arama** |
+| <img src="screenshots/episodes.png" width="100%"> | <img src="screenshots/film.png" width="100%"> |
+| **Bölümler** | **Film** |
+| <img src="screenshots/favorites.png" width="100%"> | <img src="screenshots/marathon.png" width="100%"> |
+| **Favoriler** | **İzleme Maratonu** |
+| <img src="screenshots/history.png" width="100%"> | <img src="screenshots/downloads.png" width="100%"> |
+| **Geçmiş** | **İndirilenler** |
 | <img src="screenshots/settings.png" width="100%"> | <img src="screenshots/welcome.png" width="100%"> |
-| **⚙️ Ayarlar** | **👋 Karşılama** |
+| **Ayarlar** | **Karşılama** |
 
 </div>
 
@@ -97,7 +103,7 @@ Uygulama bir **AppImage** olarak çalışıyorsa başlangıçta yeni sürümü k
 - **Otomatik:** *Ayarlar → Güncelleme → Otomatik Güncelleme* açıkken yeni sürüm bulunursa
   onay kutusu çıkar; “Güncelle ve Yeniden Başlat” deyince indirir, kurar ve uygulamayı yeniden başlatır.
 - **Elle:** *Ayarlar → Şimdi Güncelle* ile istediğin an kontrol edebilirsin.
-Kaynaktan derlenen sürümde otomatik güncelleme devre dışıdır (sadece AppImage için geçerlidir).
+Kaynaktan derlenen sürümde otomatik güncelleme devre dışıdır.
 
 ---
 
@@ -108,7 +114,7 @@ Kaynaktan derlenen sürümde otomatik güncelleme devre dışıdır (sadece AppI
 
 ISS'n video trafiğini kısıtlıyorsa yerelde bir proxy çalıştırman yeterli: uygulama
 `127.0.0.1:10808` portunu görünce mpv video trafiğini **otomatik** oradan geçirir;
-proxy yoksa hiçbir şey değişmez (kırılmaz yapı).
+proxy yoksa hiçbir şey değişmez.
 
 Kullanılan araç: [sing-box](https://github.com/SagerNet/sing-box) (root'suz, kullanıcı
 alanında çalışır) + [ProtonVPN](https://protonvpn.com) ücretsiz WireGuard config'i.
@@ -179,7 +185,8 @@ bash build_appimage.sh
 | Kısayol | İşlev |
 |---|---|
 | `/` | Bölüm ekranında hızlı bölüm arama |
-| `Ctrl+S` | Ana ekranda arama çubuğunu aç |
+| `Ctrl+S` | Ana ekranda arama çubuğuna odaklan |
+| `Ctrl+T` | Araçlar menüsünü aç/kapat |
 | `s` | Oynatıcıda intro sonuna atla |
 | `e` | Oynatıcıda outro sonuna atla |
 | `Shift+M` (`M`) | Çalan şarkıyı tarayıcıda aç (şarkı bilgisi varsa) |
@@ -225,7 +232,7 @@ Uygulama, ağ gecikmesini azaltmak için aşağıdaki teknikleri kullanır:
 ## Resmi İntro/Outro Verisi
 
 AnimeciX, intro ve outro süreleri ile açılış/kapanış şarkı bilgilerini
-AnimeciX'in resmi video altyapısından alır (üçüncü parti servis kullanılmaz).
+AnimeciX'in resmi video altyapısından alır.
 Video açılmadan önce çözülür; sonuç 6 saat önbelleğe alınır.
 
 **Davranış**:
