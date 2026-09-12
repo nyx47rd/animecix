@@ -1,4 +1,4 @@
-# AnimeciX
+# AnimeciX Linux 
 
 [![Web](https://img.shields.io/badge/Web-nyx47rd.github.io%2Fanimecix-0969da?style=flat-square)](https://nyx47rd.github.io/animecix/)
 [![Releases](https://img.shields.io/github/v/release/nyx47rd/animecix?style=flat-square)](https://github.com/nyx47rd/animecix/releases/latest)
