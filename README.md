@@ -47,16 +47,16 @@ kontrol eder ve kendini otomatik güncelleyebilir.
 
 | | |
 |:---:|:---:|
-| <img src="screenshots/home.png" width="100%"> | <img src="screenshots/search.png" width="100%"> |
-| **Ana Sayfa** | **Arama** |
-| <img src="screenshots/episodes.png" width="100%"> | <img src="screenshots/film.png" width="100%"> |
-| **Bölümler** | **Film** |
-| <img src="screenshots/favorites.png" width="100%"> | <img src="screenshots/marathon.png" width="100%"> |
-| **Favoriler** | **İzleme Maratonu** |
-| <img src="screenshots/history.png" width="100%"> | <img src="screenshots/downloads.png" width="100%"> |
-| **Geçmiş** | **İndirilenler** |
-| <img src="screenshots/settings.png" width="100%"> | <img src="screenshots/welcome.png" width="100%"> |
-| **Ayarlar** | **Karşılama** |
+| <img src="screenshots/home.png" width="100%"> | <img src="screenshots/episodes.png" width="100%"> |
+| **Ana Sayfa** | **Bölümler** |
+| <img src="screenshots/film.png" width="100%"> | <img src="screenshots/favorites.png" width="100%"> |
+| **Film** | **Favoriler** |
+| <img src="screenshots/marathon.png" width="100%"> | <img src="screenshots/history.png" width="100%"> |
+| **İzleme Maratonu** | **Geçmiş** |
+| <img src="screenshots/downloads.png" width="100%"> | <img src="screenshots/settings.png" width="100%"> |
+| **İndirilenler** | **Ayarlar** |
+| <img src="screenshots/welcome.png" width="100%"> | |
+| **Karşılama** | |
 
 </div>
 
